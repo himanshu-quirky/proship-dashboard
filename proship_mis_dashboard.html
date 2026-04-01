@@ -1,0 +1,167 @@
+
+<style>
+.kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 20px; }
+.kpi { background: var(--color-background-secondary); border-radius: var(--border-radius-md); padding: 12px 14px; }
+.kpi-label { font-size: 12px; color: var(--color-text-secondary); margin-bottom: 4px; }
+.kpi-val { font-size: 22px; font-weight: 500; color: var(--color-text-primary); }
+.kpi-sub { font-size: 11px; color: var(--color-text-secondary); margin-top: 2px; }
+.section-title { font-size: 13px; font-weight: 500; color: var(--color-text-secondary); margin: 18px 0 8px; text-transform: uppercase; letter-spacing: 0.04em; }
+.chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+.chart-box { background: var(--color-background-primary); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-lg); padding: 14px; }
+.chart-title { font-size: 13px; font-weight: 500; color: var(--color-text-primary); margin-bottom: 10px; }
+.legend { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 8px; font-size: 11px; color: var(--color-text-secondary); }
+.leg-item { display: flex; align-items: center; gap: 4px; }
+.leg-sq { width: 9px; height: 9px; border-radius: 2px; }
+table.courier-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+table.courier-table th { font-weight: 500; color: var(--color-text-secondary); text-align: left; padding: 6px 8px; border-bottom: 0.5px solid var(--color-border-tertiary); }
+table.courier-table td { padding: 6px 8px; border-bottom: 0.5px solid var(--color-border-tertiary); color: var(--color-text-primary); }
+table.courier-table tr:last-child td { border-bottom: none; }
+.bar-wrap { display: flex; align-items: center; gap: 6px; }
+.bar-bg { flex: 1; height: 6px; background: var(--color-background-secondary); border-radius: 3px; overflow: hidden; }
+.bar-fill { height: 100%; border-radius: 3px; }
+</style>
+
+<div class="kpi-grid">
+  <div class="kpi"><div class="kpi-label">Total shipments</div><div class="kpi-val">16,493</div><div class="kpi-sub">Dec 2025 – Mar 2026</div></div>
+  <div class="kpi"><div class="kpi-label">Delivery rate</div><div class="kpi-val" style="color:#1a8c5c">96.7%</div><div class="kpi-sub">15,954 delivered</div></div>
+  <div class="kpi"><div class="kpi-label">Avg TAT</div><div class="kpi-val">3.9 days</div><div class="kpi-sub">Median: 4 days</div></div>
+  <div class="kpi"><div class="kpi-label">On-time delivery</div><div class="kpi-val" style="color:#c47a1a">78.3%</div><div class="kpi-sub">vs estimated delivery date</div></div>
+</div>
+
+<div class="chart-row">
+  <div class="chart-box">
+    <div class="chart-title">Monthly shipment volume & delivery rate</div>
+    <div style="position:relative;height:170px;"><canvas id="c1"></canvas></div>
+  </div>
+  <div class="chart-box">
+    <div class="chart-title">TAT distribution (delivered shipments)</div>
+    <div style="position:relative;height:170px;"><canvas id="c2"></canvas></div>
+  </div>
+</div>
+
+<div class="chart-row">
+  <div class="chart-box">
+    <div class="chart-title">Shipment status breakdown</div>
+    <div class="legend">
+      <span class="leg-item"><span class="leg-sq" style="background:#1a8c5c"></span>Delivered 96.7%</span>
+      <span class="leg-item"><span class="leg-sq" style="background:#d97706"></span>RTO 1.8%</span>
+      <span class="leg-item"><span class="leg-sq" style="background:#6b7280"></span>Cancelled 0.6%</span>
+      <span class="leg-item"><span class="leg-sq" style="background:#dc2626"></span>Lost 0.1%</span>
+      <span class="leg-item"><span class="leg-sq" style="background:#3b82f6"></span>Active 0.4%</span>
+    </div>
+    <div style="position:relative;height:140px;"><canvas id="c3"></canvas></div>
+  </div>
+  <div class="chart-box">
+    <div class="chart-title">On-time delivery % by month</div>
+    <div style="position:relative;height:170px;"><canvas id="c4"></canvas></div>
+  </div>
+</div>
+
+<div class="chart-box" style="margin-bottom:16px;">
+  <div class="chart-title">Courier partner performance</div>
+  <table class="courier-table">
+    <thead><tr><th>Partner</th><th>Shipments</th><th>Delivery %</th><th>RTO %</th><th>Lost</th><th>Avg TAT (days)</th></tr></thead>
+    <tbody id="courier-tbody"></tbody>
+  </table>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script>
+const months = ['Dec 25', 'Jan 26', 'Feb 26', 'Mar 26*'];
+const volumes = [8570, 5253, 2272, 398];
+const deliveryRates = [96.2, 98.4, 98.6, 74.9];
+
+new Chart(document.getElementById('c1'), {
+  type: 'bar',
+  data: {
+    labels: months,
+    datasets: [
+      { label: 'Shipments', data: volumes, backgroundColor: '#3b82f6', yAxisID: 'y', borderRadius: 4 },
+      { label: 'Delivery %', data: deliveryRates, type: 'line', borderColor: '#1a8c5c', backgroundColor: 'transparent', yAxisID: 'y1', tension: 0.3, pointRadius: 4, pointBackgroundColor: '#1a8c5c' }
+    ]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: {
+      y: { grid: { color: 'rgba(128,128,128,0.1)' }, ticks: { font: { size: 11 } } },
+      y1: { position: 'right', min: 60, max: 100, grid: { display: false }, ticks: { font: { size: 11 }, callback: v => v + '%' } },
+      x: { grid: { display: false }, ticks: { font: { size: 11 } } }
+    }
+  }
+});
+
+new Chart(document.getElementById('c2'), {
+  type: 'bar',
+  data: {
+    labels: ['1','2','3','4','5','6','7','8','9','10+'],
+    datasets: [{ label: 'Shipments', data: [1665,2174,3471,3826,2108,1254,630,346,184,296], backgroundColor: '#6366f1', borderRadius: 3 }]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: {
+      y: { grid: { color: 'rgba(128,128,128,0.1)' }, ticks: { font: { size: 11 } } },
+      x: { title: { display: true, text: 'Days', font: { size: 11 } }, grid: { display: false }, ticks: { font: { size: 11 } } }
+    }
+  }
+});
+
+new Chart(document.getElementById('c3'), {
+  type: 'doughnut',
+  data: {
+    labels: ['Delivered', 'RTO', 'Cancelled', 'Lost', 'Active'],
+    datasets: [{ data: [15954, 303, 103, 22, 111], backgroundColor: ['#1a8c5c','#d97706','#6b7280','#dc2626','#3b82f6'], borderWidth: 0 }]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    cutout: '60%'
+  }
+});
+
+new Chart(document.getElementById('c4'), {
+  type: 'bar',
+  data: {
+    labels: months,
+    datasets: [{ label: 'On-time %', data: [79.8, 79.9, 68.6, 80.9], backgroundColor: ['#d97706','#d97706','#dc2626','#1a8c5c'], borderRadius: 4 }]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: {
+      y: { min: 0, max: 100, grid: { color: 'rgba(128,128,128,0.1)' }, ticks: { font: { size: 11 }, callback: v => v + '%' } },
+      x: { grid: { display: false }, ticks: { font: { size: 11 } } }
+    }
+  }
+});
+
+const courierData = [
+  ['Delhivery Surface', 15002, 97.4, 1.9, 5, 3.8],
+  ['ATS Surface', 426, 92.7, 0.2, 16, 4.1],
+  ['Ekart Surface', 329, 80.9, 1.2, 0, 5.6],
+  ['Bluedart Surface', 303, 97.0, 1.7, 1, 4.7],
+  ['Delhivery Air', 166, 92.2, 1.2, 0, 5.3],
+  ['DTDC AIR', 83, 96.4, 1.2, 0, 6.0],
+  ['Delhivery Reverse', 73, 80.8, 0.0, 0, 10.6],
+  ['XpressBees Air', 34, 100.0, 0.0, 0, 3.2],
+];
+
+const tbody = document.getElementById('courier-tbody');
+courierData.forEach(([name, total, delPct, rtoPct, lost, tat]) => {
+  const color = delPct >= 97 ? '#1a8c5c' : delPct >= 90 ? '#d97706' : '#dc2626';
+  tbody.innerHTML += `<tr>
+    <td>${name}</td>
+    <td>${total.toLocaleString()}</td>
+    <td>
+      <div class="bar-wrap">
+        <div class="bar-bg"><div class="bar-fill" style="width:${delPct}%;background:${color}"></div></div>
+        <span style="min-width:38px;color:${color};font-weight:500">${delPct}%</span>
+      </div>
+    </td>
+    <td style="color:${rtoPct>2?'#dc2626':rtoPct>1?'#d97706':'inherit'}">${rtoPct}%</td>
+    <td style="color:${lost>10?'#dc2626':lost>0?'#d97706':'inherit'}">${lost}</td>
+    <td>${tat}</td>
+  </tr>`;
+});
+</script>
