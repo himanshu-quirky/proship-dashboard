@@ -2,7 +2,6 @@
 const slack = require('./slack');
 const wa = require('./whatsapp');
 
-// Track which breach AWBs have already triggered a real-time notification this session
 const notifiedBreaches = new Set();
 let thresholdTriggered = false;
 
@@ -19,9 +18,24 @@ function addNotification(store, message, type = 'breach') {
     type
   };
   store.notifications.unshift(notif);
-  // Keep last 100
   store.notifications = store.notifications.slice(0, 100);
   return notif;
+}
+
+// Returns array of recipient ids for WA alerts
+function getWARecipients(settings) {
+  if (Array.isArray(settings.waRecipients) && settings.waRecipients.length) {
+    return settings.waRecipients.map(r => r.id || r);
+  }
+  return [];
+}
+
+async function sendToAllWARecipients(settings, message) {
+  if (!settings.waConnected) return;
+  const recipients = getWARecipients(settings);
+  for (const id of recipients) {
+    await wa.sendMessage(id, message);
+  }
 }
 
 async function checkAndNotify(store, sendSSE) {
@@ -37,43 +51,38 @@ async function checkAndNotify(store, sendSSE) {
       newBreaches: newAWBs.length,
       awbs: newAWBs,
       totalBreaches,
-      dashboardUrl: process.env.DASHBOARD_URL || 'http://localhost:3000'
+      dashboardUrl: process.env.DASHBOARD_URL || `http://localhost:${process.env.PORT || 3000}`
     };
 
-    // WhatsApp
-    if (settings.waConnected && settings.waRecipient) {
-      const msg = wa.formatBreachAlert(alertPayload);
-      await wa.sendMessage(settings.waRecipient, msg);
-    }
+    const waMsg = wa.formatBreachAlert(alertPayload);
+    await sendToAllWARecipients(settings, waMsg);
 
-    // Slack
     if (settings.slackWebhook) {
       const blocks = slack.buildBreachBlocks(alertPayload);
       const text = `${newAWBs.length} new SLA breach${newAWBs.length !== 1 ? 'es' : ''} detected`;
       await slack.send(settings.slackWebhook, text, blocks);
     }
 
-    const notif = addNotification(store, `${newAWBs.length} new SLA breach${newAWBs.length !== 1 ? 'es' : ''} detected: ${newAWBs.slice(0, 3).join(', ')}${newAWBs.length > 3 ? ` +${newAWBs.length - 3} more` : ''}`, 'breach');
+    const notif = addNotification(store,
+      `${newAWBs.length} new SLA breach${newAWBs.length !== 1 ? 'es' : ''} detected: ${newAWBs.slice(0, 3).join(', ')}${newAWBs.length > 3 ? ` +${newAWBs.length - 3} more` : ''}`,
+      'breach'
+    );
     sendSSE('notification', notif);
   }
 
-  // Threshold alert
   const totalBreaches = store.cancellations?.kpis?.totalBreaches || 0;
   const threshold = settings.breachThreshold || 10;
   if (totalBreaches >= threshold && !thresholdTriggered) {
     thresholdTriggered = true;
     const msg = `Breach threshold crossed: ${totalBreaches} active breaches (limit: ${threshold})`;
-
-    if (settings.waConnected && settings.waRecipient) {
-      await wa.sendMessage(settings.waRecipient, `⚠️ *Prozoship Threshold Alert*\n${msg}`);
-    }
+    await sendToAllWARecipients(settings, `⚠️ *Prozoship Threshold Alert*\n${msg}`);
     if (settings.slackWebhook) {
       await slack.send(settings.slackWebhook, msg);
     }
     addNotification(store, msg, 'threshold');
     sendSSE('notification', { message: msg, type: 'threshold' });
   } else if (totalBreaches < threshold) {
-    thresholdTriggered = false; // reset for next crossing
+    thresholdTriggered = false;
   }
 
   sendSSE('notificationsUpdated', {
@@ -83,14 +92,12 @@ async function checkAndNotify(store, sendSSE) {
 
 async function sendDailyDigest(store) {
   const { settings } = store;
-  const dashboardUrl = process.env.DASHBOARD_URL || 'http://localhost:3000';
+  const dashboardUrl = process.env.DASHBOARD_URL || `http://localhost:${process.env.PORT || 3000}`;
 
   if (settings.notificationMode !== 'daily' && settings.notificationMode !== 'both') return;
 
-  if (settings.waConnected && settings.waRecipient) {
-    const msg = wa.formatDailyDigest({ store, dashboardUrl });
-    await wa.sendMessage(settings.waRecipient, msg);
-  }
+  const waMsg = wa.formatDailyDigest({ store, dashboardUrl });
+  await sendToAllWARecipients(settings, waMsg);
 
   if (settings.slackWebhook) {
     const blocks = slack.buildDigestBlocks({ store, dashboardUrl });
@@ -98,8 +105,7 @@ async function sendDailyDigest(store) {
   }
 
   const totalBreaches = store.cancellations?.kpis?.totalBreaches || 0;
-  const message = `Daily digest sent — ${totalBreaches} active SLA breach${totalBreaches !== 1 ? 'es' : ''}`;
-  console.log(message);
+  console.log(`Daily digest sent — ${totalBreaches} active SLA breach${totalBreaches !== 1 ? 'es' : ''}`);
 }
 
 module.exports = { checkAndNotify, sendDailyDigest, addNotification };

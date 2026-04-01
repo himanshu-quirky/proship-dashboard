@@ -2,5 +2,6 @@ node_modules/
 .env
 .wwebjs_auth/
 data/store.json
+data/wa_auth/
 *.log
 .DS_Store

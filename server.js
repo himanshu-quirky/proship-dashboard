@@ -27,8 +27,7 @@ let store = {
     breachThreshold: 10,
     notificationMode: 'both',
     slackWebhook: '',
-    waTargetChatId: '',
-    waTargetName: '',
+    waRecipients: [],
     waConnected: false,
     proshipUsername: process.env.PROSHIP_USERNAME || '',
     proshipPassword: process.env.PROSHIP_PASSWORD || '',
@@ -90,6 +89,7 @@ function clientState() {
     waInitializing: waModule ? waModule.isInitializing() : false,
     proshipConnected: !!(store.settings.proshipUsername && store.settings.proshipPassword),
     lastProshipSync: store.lastProshipSync,
+    waRecipients: store.settings.waRecipients || [],
     settings: store.settings
   };
 }
@@ -310,7 +310,7 @@ app.post('/api/notifications/:id/read', (req, res) => {
 app.get('/api/settings', (req, res) => res.json(store.settings));
 
 app.post('/api/settings', (req, res) => {
-  const allowed = ['breachThreshold', 'notificationMode', 'slackWebhook', 'waTargetChatId', 'waTargetName', 'proshipUsername', 'proshipPassword', 'pollIntervalMinutes'];
+  const allowed = ['breachThreshold', 'notificationMode', 'slackWebhook', 'waRecipients', 'proshipUsername', 'proshipPassword', 'pollIntervalMinutes'];
   allowed.forEach(k => { if (req.body[k] !== undefined) store.settings[k] = req.body[k]; });
   if (req.body.breachThreshold) store.settings.breachThreshold = parseInt(req.body.breachThreshold);
   if (req.body.pollIntervalMinutes) store.settings.pollIntervalMinutes = parseInt(req.body.pollIntervalMinutes);
@@ -349,12 +349,37 @@ app.get('/api/whatsapp/chats', async (req, res) => {
   }
 });
 
+app.get('/api/whatsapp/refresh-chats', async (req, res) => {
+  const wa = getWA();
+  if (!wa || !wa.isConnected()) return res.json({ error: 'Not connected', chats: [] });
+  try {
+    const chats = await wa.refreshChats();
+    res.json({ chats });
+  } catch (e) {
+    res.json({ error: e.message, chats: [] });
+  }
+});
+
+app.post('/api/whatsapp/send', async (req, res) => {
+  const wa = getWA();
+  if (!wa || !wa.isConnected()) return res.status(400).json({ error: 'WhatsApp not connected' });
+  const { chatIds, message } = req.body;
+  if (!Array.isArray(chatIds) || chatIds.length === 0 || !message?.trim()) {
+    return res.status(400).json({ error: 'chatIds (array) and message are required' });
+  }
+  const results = [];
+  for (const id of chatIds) {
+    const ok = await wa.sendMessage(id, message.trim());
+    results.push({ id, ok });
+  }
+  res.json({ results });
+});
+
 app.post('/api/whatsapp/disconnect', async (req, res) => {
   const wa = getWA();
   if (wa) await wa.disconnect();
   store.settings.waConnected = false;
-  store.settings.waTargetChatId = '';
-  store.settings.waTargetName = '';
+  store.settings.waRecipients = [];
   saveStore();
   sendSSE('waStatus', { connected: false });
   res.json({ ok: true });

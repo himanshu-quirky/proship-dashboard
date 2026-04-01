@@ -12,6 +12,8 @@ const state = {
   waInitializing: false,
   waQR: null,
   waChats: [],
+  waRecipients: [],
+  broadcastSelected: [],
   proshipConnected: false,
   lastProshipSync: null,
   totalBreaches: 0,
@@ -150,6 +152,8 @@ function applyClientState(d) {
   state.proshipConnected = d.proshipConnected || false;
   state.lastProshipSync = d.lastProshipSync || null;
   if (d.settings) state.settings = d.settings;
+  if (d.waRecipients) state.waRecipients = d.waRecipients;
+  if (d.settings?.waRecipients) state.waRecipients = d.settings.waRecipients;
   updateTopBar();
 }
 
@@ -166,7 +170,8 @@ const nb = document.getElementById('notif-badge');
   if (waPill && waTxt) {
     if (state.waConnected) {
       waPill.className = 'wa-pill connected';
-      waTxt.textContent = state.settings.waTargetName ? `WA: ${state.settings.waTargetName.slice(0, 20)}` : 'Connected';
+      const recipCount = (state.settings.waRecipients || []).length;
+      waTxt.textContent = recipCount ? `WA: ${recipCount} group${recipCount > 1 ? 's' : ''}` : 'Connected';
       if (waDot) waDot.className = 'wa-dot';
     } else if (state.waInitializing) {
       waPill.className = 'wa-pill';
@@ -202,6 +207,7 @@ function renderCurrentView() {
   if (state.view === 'delivery') renderDelivery();
   else if (state.view === 'pickup') renderPickup();
   else if (state.view === 'cancellations') renderCancellations();
+  else if (state.view === 'broadcast') renderBroadcast();
   else if (state.view === 'settings') renderSettings();
 }
 
@@ -651,18 +657,20 @@ function renderSettings() {
 
 function renderWASection() {
   if (state.waConnected) {
-    const s = state.settings;
+    const recipients = state.settings.waRecipients || [];
     return `
       <div class="wa-connected-badge">✓ WhatsApp connected</div>
-      <div class="form-row chat-picker-wrap" style="margin-top:12px">
-        <label class="form-label">Send notifications to</label>
+      <div class="form-row" style="margin-top:12px">
+        <label class="form-label">Auto-alert groups <span style="color:var(--text-3);font-weight:400">(checked groups receive breach alerts &amp; daily digests)</span></label>
         <div id="chat-picker-container">${renderChatPickerInner()}</div>
       </div>
-      <div style="margin-top:10px">
+      <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-outline btn-sm" onclick="refreshWAChats()">Refresh groups</button>
         <button class="btn btn-danger btn-sm" onclick="disconnectWA()">Disconnect WhatsApp</button>
       </div>
       <div class="form-hint" style="margin-top:8px">
-        Only the selected chat receives notifications. No messages are read by this dashboard.
+        ${recipients.length ? `✓ ${recipients.length} group${recipients.length>1?'s':''} selected for auto-alerts.` : 'No groups selected — alerts won\'t be sent via WhatsApp.'}
+        No messages are read by this dashboard.
       </div>`;
   }
   const hasQR = !!state.waQR;
@@ -677,23 +685,22 @@ function renderWASection() {
       </button>
     </div>
     <div class="form-hint" style="text-align:center">
-      Scan with your phone. No chats or messages are read — only notifications are sent to a group you pick.
+      Scan with your phone. No chats or messages are read — only notifications are sent to groups you select.
     </div>`;
 }
 
 function renderChatPickerInner() {
   if (!state.waChats.length) {
-    return `<div class="chat-loading">Loading chats…</div><button class="btn btn-outline btn-sm" onclick="loadWAChats()">Load chats</button>`;
+    return `<div class="chat-loading">No groups loaded yet</div><button class="btn btn-outline btn-sm" style="margin-top:6px" onclick="loadWAChats()">Load groups</button>`;
   }
-  const selected = state.settings.waTargetChatId || '';
-  const groups = state.waChats.filter(c => c.isGroup);
-  const contacts = state.waChats.filter(c => !c.isGroup);
-  return `<select class="form-select" id="chat-select" onchange="selectChat(this.value, this.options[this.selectedIndex].text)">
-    <option value="">Select a chat or group…</option>
-    ${groups.length ? `<optgroup label="Groups">${groups.map(c=>`<option value="${esc(c.id)}" ${c.id===selected?'selected':''}>${esc(c.name)}${c.participantsCount?` (${c.participantsCount})`:''}` ).join('')}</optgroup>` : ''}
-    ${contacts.length ? `<optgroup label="Contacts">${contacts.slice(0,50).map(c=>`<option value="${esc(c.id)}" ${c.id===selected?'selected':''}>${esc(c.name)}</option>`).join('')}</optgroup>` : ''}
-  </select>
-  ${selected ? `<div class="form-hint" style="margin-top:4px">✓ Sending to: <strong>${esc(state.settings.waTargetName||selected)}</strong></div>` : ''}`;
+  const selected = new Set((state.settings.waRecipients || []).map(r => r.id));
+  return `<div class="chat-checklist">${state.waChats.map(c => `
+    <label class="chat-check-item">
+      <input type="checkbox" value="${esc(c.id)}" ${selected.has(c.id)?'checked':''}
+        onchange="toggleRecipient('${esc(c.id)}','${esc(c.name.replace(/'/g,"\\'"))}',${c.isGroup},this.checked)">
+      <span class="chat-check-name">${esc(c.name)}</span>
+      ${c.participantsCount ? `<span class="chat-check-count">${c.participantsCount}</span>` : ''}
+    </label>`).join('')}</div>`;
 }
 
 function renderChatPicker() {
@@ -770,33 +777,237 @@ async function disconnectWA() {
   state.waConnected = false;
   state.waQR = null;
   state.waChats = [];
-  state.settings.waTargetChatId = '';
-  state.settings.waTargetName = '';
+  state.waRecipients = [];
+  state.settings.waRecipients = [];
   updateTopBar();
   renderSettings();
 }
 
 async function loadWAChats() {
   const container = document.getElementById('chat-picker-container');
-  if (container) container.innerHTML = '<div class="chat-loading">Loading…</div>';
+  if (container) container.innerHTML = '<div class="chat-loading">Loading groups…</div>';
   const data = await api('/api/whatsapp/chats');
   if (data?.chats) {
     state.waChats = data.chats;
     renderChatPicker();
+    renderBroadcastGroupList();
   } else {
-    if (container) container.innerHTML = '<div class="chat-loading" style="color:var(--red)">Failed to load chats</div>';
+    if (container) container.innerHTML = '<div class="chat-loading" style="color:var(--red)">Failed to load groups</div>';
   }
 }
 
-async function selectChat(chatId, chatName) {
-  if (!chatId) return;
-  const cleanName = chatName.replace(/^(Groups|Contacts)\s*\/\s*/, '').trim();
-  await api('/api/settings', { method:'POST', body:JSON.stringify({ waTargetChatId: chatId, waTargetName: cleanName }) });
-  state.settings.waTargetChatId = chatId;
-  state.settings.waTargetName = cleanName;
+async function refreshWAChats() {
+  const container = document.getElementById('chat-picker-container');
+  if (container) container.innerHTML = '<div class="chat-loading">Refreshing…</div>';
+  const data = await api('/api/whatsapp/refresh-chats');
+  if (data?.chats) {
+    state.waChats = data.chats;
+    renderChatPicker();
+    renderBroadcastGroupList();
+    toast(`${data.chats.length} groups loaded`, 'success');
+  } else {
+    toast('Refresh failed', 'error');
+    renderChatPicker();
+  }
+}
+
+async function toggleRecipient(chatId, chatName, isGroup, checked) {
+  const recipients = [...(state.settings.waRecipients || [])];
+  if (checked) {
+    if (!recipients.find(r => r.id === chatId)) recipients.push({ id: chatId, name: chatName, isGroup });
+  } else {
+    const idx = recipients.findIndex(r => r.id === chatId);
+    if (idx > -1) recipients.splice(idx, 1);
+  }
+  await api('/api/settings', { method:'POST', body:JSON.stringify({ waRecipients: recipients }) });
+  state.settings.waRecipients = recipients;
+  state.waRecipients = recipients;
   updateTopBar();
-  renderChatPicker();
-  toast(`Notifications → ${cleanName}`, 'success');
+  // Refresh the hint line without full re-render
+  const waSection = document.getElementById('wa-section');
+  if (waSection) waSection.innerHTML = renderWASection();
+}
+
+// ── BROADCAST VIEW ────────────────────────────────────────────────────────────
+
+function renderBroadcast() {
+  const el = document.getElementById('content');
+
+  if (!state.waConnected) {
+    el.innerHTML = `
+      <div class="view-header">
+        <div>
+          <div class="view-title">WhatsApp Broadcast</div>
+          <div class="view-meta">Send messages to groups and chats</div>
+        </div>
+      </div>
+      <div class="broadcast-connect-prompt">
+        <div class="broadcast-connect-icon">
+          <svg width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 013.07 9.8 19.79 19.79 0 01.1 1.18 2 2 0 012.09 0h3a2 2 0 012 1.72 12.84 12.84 0 00.7 2.81 2 2 0 01-.45 2.11L6.09 7.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45 12.84 12.84 0 002.81.7A2 2 0 0122 14.92z"/></svg>
+        </div>
+        <p class="broadcast-connect-text">WhatsApp not connected</p>
+        <p class="broadcast-connect-hint">Go to <strong>Settings → WhatsApp</strong> and scan the QR code to connect your account.</p>
+        <button class="btn btn-primary" onclick="setView('settings')">Go to Settings</button>
+      </div>`;
+    return;
+  }
+
+  const groups = state.waChats;
+  el.innerHTML = `
+    <div class="view-header">
+      <div>
+        <div class="view-title">WhatsApp Broadcast</div>
+        <div class="view-meta">Select groups and send a message</div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <span class="wa-connected-badge" style="display:inline-flex">✓ Connected</span>
+        <button class="btn btn-outline btn-sm" onclick="refreshBroadcastGroups()">Refresh groups</button>
+      </div>
+    </div>
+    <div class="broadcast-layout">
+      <div class="broadcast-groups-panel">
+        <div class="broadcast-panel-header">
+          <span class="broadcast-panel-title">Groups &amp; Chats</span>
+          <span class="broadcast-panel-count" id="bc-selected-count">${state.broadcastSelected.length} selected</span>
+        </div>
+        <div class="broadcast-search-wrap">
+          <input class="form-input broadcast-search" id="bc-search" placeholder="Search groups…" oninput="filterBroadcastGroups(this.value)">
+        </div>
+        <div id="broadcast-group-list" class="broadcast-group-list">
+          ${renderBroadcastGroupListInner(groups, '')}
+        </div>
+        <div class="broadcast-select-actions">
+          <button class="btn-text" onclick="selectAllBroadcast()">Select all</button>
+          <button class="btn-text" onclick="clearBroadcast()">Clear</button>
+        </div>
+      </div>
+      <div class="broadcast-compose-panel">
+        <div class="broadcast-panel-header">
+          <span class="broadcast-panel-title">Message</span>
+        </div>
+        <textarea id="broadcast-message" class="broadcast-textarea" placeholder="Type your message here…\n\nSupports WhatsApp formatting:\n*bold*  _italic_  ~strikethrough~"></textarea>
+        <div class="broadcast-compose-footer">
+          <span id="bc-char-count" class="broadcast-char-count">0 / 4096</span>
+          <button class="btn btn-primary" id="send-broadcast-btn" onclick="sendBroadcast()">
+            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="margin-right:5px"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+            Send Message
+          </button>
+        </div>
+        <div id="broadcast-send-results"></div>
+      </div>
+    </div>`;
+
+  document.getElementById('broadcast-message')?.addEventListener('input', e => {
+    document.getElementById('bc-char-count').textContent = `${e.target.value.length} / 4096`;
+  });
+}
+
+function renderBroadcastGroupListInner(groups, filter) {
+  const q = filter.toLowerCase();
+  const visible = q ? groups.filter(g => g.name.toLowerCase().includes(q)) : groups;
+  if (!visible.length && !groups.length) {
+    return `<div class="broadcast-empty-groups">No groups yet — <button class="btn-text" onclick="loadWAChats()">load groups</button></div>`;
+  }
+  if (!visible.length) return `<div class="broadcast-empty-groups">No groups match "${esc(filter)}"</div>`;
+  return visible.map(g => {
+    const checked = state.broadcastSelected.includes(g.id);
+    return `<label class="broadcast-group-item ${checked?'checked':''}">
+      <input type="checkbox" value="${esc(g.id)}" ${checked?'checked':''}
+        onchange="toggleBroadcastGroup('${esc(g.id)}',this.checked,this.closest('label'))">
+      <span class="broadcast-group-name">${esc(g.name)}</span>
+      ${g.participantsCount ? `<span class="broadcast-group-count">${g.participantsCount} members</span>` : ''}
+    </label>`;
+  }).join('');
+}
+
+function renderBroadcastGroupList() {
+  const el = document.getElementById('broadcast-group-list');
+  if (!el) return;
+  const q = document.getElementById('bc-search')?.value || '';
+  el.innerHTML = renderBroadcastGroupListInner(state.waChats, q);
+}
+
+function toggleBroadcastGroup(id, checked, labelEl) {
+  if (checked) {
+    if (!state.broadcastSelected.includes(id)) state.broadcastSelected.push(id);
+  } else {
+    state.broadcastSelected = state.broadcastSelected.filter(x => x !== id);
+  }
+  if (labelEl) labelEl.classList.toggle('checked', checked);
+  const cnt = document.getElementById('bc-selected-count');
+  if (cnt) cnt.textContent = `${state.broadcastSelected.length} selected`;
+}
+
+function filterBroadcastGroups(q) {
+  const el = document.getElementById('broadcast-group-list');
+  if (el) el.innerHTML = renderBroadcastGroupListInner(state.waChats, q);
+}
+
+function selectAllBroadcast() {
+  const q = document.getElementById('bc-search')?.value?.toLowerCase() || '';
+  const visible = q ? state.waChats.filter(g => g.name.toLowerCase().includes(q)) : state.waChats;
+  visible.forEach(g => { if (!state.broadcastSelected.includes(g.id)) state.broadcastSelected.push(g.id); });
+  renderBroadcastGroupList();
+  const cnt = document.getElementById('bc-selected-count');
+  if (cnt) cnt.textContent = `${state.broadcastSelected.length} selected`;
+}
+
+function clearBroadcast() {
+  state.broadcastSelected = [];
+  renderBroadcastGroupList();
+  const cnt = document.getElementById('bc-selected-count');
+  if (cnt) cnt.textContent = '0 selected';
+}
+
+async function refreshBroadcastGroups() {
+  const el = document.getElementById('broadcast-group-list');
+  if (el) el.innerHTML = '<div class="broadcast-empty-groups">Refreshing…</div>';
+  const data = await api('/api/whatsapp/refresh-chats');
+  if (data?.chats) {
+    state.waChats = data.chats;
+    renderBroadcastGroupList();
+    toast(`${data.chats.length} groups loaded`, 'success');
+  } else {
+    toast('Refresh failed', 'error');
+    renderBroadcastGroupList();
+  }
+}
+
+async function sendBroadcast() {
+  if (!state.broadcastSelected.length) { toast('Select at least one group', 'error'); return; }
+  const message = document.getElementById('broadcast-message')?.value?.trim();
+  if (!message) { toast('Enter a message', 'error'); return; }
+
+  const btn = document.getElementById('send-broadcast-btn');
+  if (btn) { btn.disabled = true; btn.innerHTML = 'Sending…'; }
+
+  const res = await api('/api/whatsapp/send', {
+    method: 'POST',
+    body: JSON.stringify({ chatIds: state.broadcastSelected, message })
+  });
+
+  if (res?.results) {
+    const ok = res.results.filter(r => r.ok).length;
+    const total = res.results.length;
+    const resultsEl = document.getElementById('broadcast-send-results');
+    if (resultsEl) {
+      resultsEl.innerHTML = `<div class="broadcast-result ${ok===total?'ok':'partial'}">
+        ${ok===total ? '✓' : '⚠'} Sent to ${ok} of ${total} recipient${total>1?'s':''}
+      </div>`;
+    }
+    toast(`Sent to ${ok}/${total}`, ok > 0 ? 'success' : 'error');
+    if (ok > 0) {
+      document.getElementById('broadcast-message').value = '';
+      document.getElementById('bc-char-count').textContent = '0 / 4096';
+    }
+  } else {
+    toast(res?.error || 'Send failed', 'error');
+  }
+
+  if (btn) {
+    btn.disabled = false;
+    btn.innerHTML = '<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="margin-right:5px"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>Send Message';
+  }
 }
 
 // ── Notifications panel ───────────────────────────────────────────────────────
