@@ -281,12 +281,15 @@ function handleSort(e) {
 }
 
 function renderEmpty(label, icon = '📂') {
-  const hasKey = state.settings.proshipApiKey;
+  const hasCreds = state.settings.proshipUsername && state.settings.proshipPassword;
   return `<div class="empty-state">
     <div class="empty-icon">${icon}</div>
     <div class="empty-title">No ${label} data yet</div>
-    <div class="empty-sub">${hasKey ? 'Data is being fetched from Proship. This may take a moment on first load.' : 'Connect your Proship account in Settings, or upload a report file manually.'}</div>
-    ${hasKey ? `<button class="btn btn-primary" onclick="triggerSync()">Sync Now</button>` : `<button class="btn btn-outline" onclick="setView('settings')">Go to Settings</button>`}
+    <div class="empty-sub">${hasCreds ? 'Data is being fetched from Proship. Click Sync Now or wait for auto-sync.' : 'Connect your Proship account in Settings to auto-fetch, or upload a report manually.'}</div>
+    <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:4px">
+      ${hasCreds ? `<button class="btn btn-primary" onclick="triggerSync()">Sync Now</button>` : `<button class="btn btn-outline" onclick="setView('settings')">Go to Settings</button>`}
+      <button class="btn btn-outline" onclick="openUploadModal()">Upload Report Manually</button>
+    </div>
   </div>`;
 }
 
@@ -1098,7 +1101,7 @@ async function handleFiles(files) {
 // ── Actions ───────────────────────────────────────────────────────────────────
 async function triggerSync() {
   if (state.syncing) { toast('Sync already running…', 'info'); return; }
-  if (!state.settings.proshipApiKey) { toast('No Proship API key — use Upload Reports instead', 'error'); return; }
+  if (!state.settings.proshipUsername) { toast('No Proship credentials — configure in Settings first', 'error'); return; }
   state.syncing = true;
   toast('Syncing from Proship…', 'info');
   await api('/api/proship/sync', { method:'POST', body:'{}' });

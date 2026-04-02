@@ -42,10 +42,9 @@ function loadStore() {
     if (fs.existsSync(STORE_PATH)) {
       const saved = JSON.parse(fs.readFileSync(STORE_PATH, 'utf8'));
       // Only restore data that came from the live API — discard old HTML-upload data
-      const isApiData = d => d && d.meta && d.meta.source === 'Proship API';
-      store.delivery = isApiData(saved.delivery) ? saved.delivery : null;
-      store.pickup = isApiData(saved.pickup) ? saved.pickup : null;
-      store.cancellations = isApiData(saved.cancellations) ? saved.cancellations : null;
+      store.delivery = saved.delivery || null;
+      store.pickup = saved.pickup || null;
+      store.cancellations = saved.cancellations || null;
       store.lastProshipSync = saved.lastProshipSync || null;
       store.settings = { ...store.settings, ...saved.settings };
       // Env credentials take precedence over stored ones if set

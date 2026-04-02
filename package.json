@@ -16,6 +16,7 @@
     "node-cron": "^3.0.3",
     "node-fetch": "^2.7.0",
     "qrcode": "^1.5.3",
+    "stream-chain": "^2.2.5",
     "stream-json": "^2.1.0"
   },
   "devDependencies": {
