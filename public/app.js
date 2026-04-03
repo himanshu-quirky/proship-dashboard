@@ -20,7 +20,8 @@ const state = {
   unread: 0,
   syncing: false,
   tableSort: { key: null, dir: 'asc' },
-  tableFilter: {}
+  tableFilter: {},
+  dateRange: { preset: 'all', from: null, to: null }
 };
 
 const charts = {};
@@ -224,6 +225,114 @@ function fmtRelative(iso) {
 }
 function num(n) { return (n||0).toLocaleString('en-IN'); }
 
+// ── Date range helpers ────────────────────────────────────────────────────────
+function getDateRangeBounds() {
+  const { preset, from, to } = state.dateRange;
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (preset === 'today') return { from: today, to: new Date(today.getTime() + 86400000 - 1) };
+  if (preset === '7d')  return { from: new Date(today - 6 * 86400000), to: new Date(today.getTime() + 86400000 - 1) };
+  if (preset === '30d') return { from: new Date(today - 29 * 86400000), to: new Date(today.getTime() + 86400000 - 1) };
+  if (preset === '3m')  return { from: new Date(today - 89 * 86400000), to: new Date(today.getTime() + 86400000 - 1) };
+  if (preset === 'custom' && from && to) return { from: new Date(from + 'T00:00:00'), to: new Date(to + 'T23:59:59') };
+  return null; // 'all' — no filter
+}
+
+function inDateRange(dateStr) {
+  if (!dateStr) return true;
+  const bounds = getDateRangeBounds();
+  if (!bounds) return true;
+  const d = new Date(dateStr);
+  if (isNaN(d)) return true;
+  return d >= bounds.from && d <= bounds.to;
+}
+
+function filterMonthlyTrend(trend) {
+  const bounds = getDateRangeBounds();
+  if (!bounds) return trend;
+  return trend.filter(m => {
+    const d = new Date(m.month + ' 2024'); // approximate month parse
+    return true; // monthly trend is approximate — show all, just dim
+  });
+}
+
+function filterShipments(shipments) {
+  const bounds = getDateRangeBounds();
+  if (!bounds) return shipments;
+  return shipments.filter(s => {
+    // Try pickupDate first, then fall back to checking daysElapsed from today
+    const raw = s._rawDate || s.pickupDate;
+    if (!raw || raw.startsWith('No pickup')) {
+      // For orders with no pickup, can't filter precisely — include them
+      return true;
+    }
+    try {
+      const d = new Date(raw);
+      if (isNaN(d)) return true;
+      return d >= bounds.from && d <= bounds.to;
+    } catch (_) { return true; }
+  });
+}
+
+function setupDateRangeBar() {
+  document.querySelectorAll('.dr-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const preset = btn.dataset.preset;
+      document.querySelectorAll('.dr-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      state.dateRange.preset = preset;
+      const customPanel = document.getElementById('dr-custom');
+      const activeLabel = document.getElementById('dr-active-label');
+      if (preset === 'custom') {
+        customPanel.classList.remove('hidden');
+        // Set default to last 30 days if empty
+        if (!document.getElementById('dr-from').value) {
+          const to = new Date();
+          const from = new Date(to - 29 * 86400000);
+          document.getElementById('dr-from').value = from.toISOString().slice(0, 10);
+          document.getElementById('dr-to').value = to.toISOString().slice(0, 10);
+        }
+      } else {
+        customPanel.classList.add('hidden');
+        state.dateRange.from = null;
+        state.dateRange.to = null;
+        if (preset === 'all') {
+          activeLabel.classList.add('hidden');
+        } else {
+          activeLabel.classList.remove('hidden');
+          const labels = { today: 'Showing: Today', '7d': 'Showing: Last 7 days', '30d': 'Showing: Last 30 days', '3m': 'Showing: Last 3 months' };
+          activeLabel.textContent = labels[preset] || '';
+        }
+        renderCurrentView();
+      }
+    });
+  });
+}
+
+function applyCustomRange() {
+  const from = document.getElementById('dr-from').value;
+  const to = document.getElementById('dr-to').value;
+  if (!from || !to) { toast('Select both From and To dates', 'error'); return; }
+  if (new Date(from) > new Date(to)) { toast('From date must be before To date', 'error'); return; }
+  state.dateRange.from = from;
+  state.dateRange.to = to;
+  const activeLabel = document.getElementById('dr-active-label');
+  activeLabel.classList.remove('hidden');
+  activeLabel.textContent = `Showing: ${from} → ${to}`;
+  renderCurrentView();
+}
+
+function clearCustomRange() {
+  state.dateRange = { preset: 'all', from: null, to: null };
+  document.querySelectorAll('.dr-btn').forEach(b => b.classList.remove('active'));
+  document.querySelector('.dr-btn[data-preset="all"]').classList.add('active');
+  document.getElementById('dr-custom').classList.add('hidden');
+  document.getElementById('dr-active-label').classList.add('hidden');
+  document.getElementById('dr-from').value = '';
+  document.getElementById('dr-to').value = '';
+  renderCurrentView();
+}
+
 function destroyChart(id) { if (charts[id]) { charts[id].destroy(); delete charts[id]; } }
 function makeChart(id, config) {
   destroyChart(id);
@@ -298,7 +407,29 @@ function renderDelivery() {
   const el = document.getElementById('content');
   const d = state.delivery;
   if (!d) { el.innerHTML = renderEmpty('delivery data', '📦'); return; }
-  const k = d.kpis, insight = getAIInsight();
+  const insight = getAIInsight();
+
+  // Apply date range filter to monthly trend
+  const bounds = getDateRangeBounds();
+  const monthlyTrend = bounds
+    ? (d.monthlyTrend || []).filter(m => {
+        // Parse "Apr '25" style month labels
+        try { const dt = new Date(m.month.replace("'", "20")); return !isNaN(dt) ? (dt >= bounds.from && dt <= bounds.to) : true; } catch(_) { return true; }
+      })
+    : (d.monthlyTrend || []);
+
+  // Recalculate KPIs from filtered monthly data if filter is active
+  let k = d.kpis;
+  if (bounds && monthlyTrend.length && monthlyTrend.length < (d.monthlyTrend || []).length) {
+    const filtTotal = monthlyTrend.reduce((a, m) => a + m.volume, 0);
+    const filtDelivered = monthlyTrend.reduce((a, m) => a + Math.round(m.volume * m.deliveryRate / 100), 0);
+    k = {
+      ...d.kpis,
+      totalShipments: filtTotal,
+      deliveredCount: filtDelivered,
+      deliveryRate: filtTotal ? parseFloat((filtDelivered / filtTotal * 100).toFixed(1)) : 0
+    };
+  }
 
   el.innerHTML = `
     <div class="view-header">
@@ -369,10 +500,10 @@ function renderDelivery() {
 
   if (insight) renderInsightStrip(document.getElementById('ai-insight-strip'), insight.message, insight.timestamp);
 
-  const months = (d.monthlyTrend||[]).map(m=>m.month);
+  const months = monthlyTrend.map(m=>m.month);
   makeChart('chart-monthly', { type:'bar', data:{ labels:months, datasets:[
-    { label:'Shipments', data:(d.monthlyTrend||[]).map(m=>m.volume), backgroundColor:'#0F172A', yAxisID:'y', borderRadius:3 },
-    { label:'Delivery %', data:(d.monthlyTrend||[]).map(m=>m.deliveryRate), type:'line', borderColor:'#16A34A', backgroundColor:'transparent', yAxisID:'y1', tension:0.3, pointRadius:3, pointBackgroundColor:'#16A34A' }
+    { label:'Shipments', data:monthlyTrend.map(m=>m.volume), backgroundColor:'#0F172A', yAxisID:'y', borderRadius:3 },
+    { label:'Delivery %', data:monthlyTrend.map(m=>m.deliveryRate), type:'line', borderColor:'#16A34A', backgroundColor:'transparent', yAxisID:'y1', tension:0.3, pointRadius:3, pointBackgroundColor:'#16A34A' }
   ]}, options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{ y:{grid:{color:'rgba(0,0,0,0.04)'},ticks:{font:CHART_FONT}}, y1:{position:'right',min:60,max:100,grid:{display:false},ticks:{font:CHART_FONT,callback:v=>v+'%'}}, x:{grid:{display:false},ticks:{font:CHART_FONT}} }}});
 
   makeChart('chart-tat', { type:'bar', data:{ labels:(d.tatDistribution||[]).map(t=>t.days), datasets:[{ data:(d.tatDistribution||[]).map(t=>t.count), backgroundColor:'#2563EB', borderRadius:3 }]}, options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{ y:{grid:{color:'rgba(0,0,0,0.04)'},ticks:{font:CHART_FONT}}, x:{title:{display:true,text:'Days',font:CHART_FONT},grid:{display:false},ticks:{font:CHART_FONT}} }}});
@@ -385,7 +516,7 @@ function renderDelivery() {
   const total = statusVals.reduce((a,b)=>(a||0)+(b||0),0)||1;
   document.getElementById('status-legend').innerHTML = statusLabels.map((l,i)=>`<div class="legend-item"><div class="legend-dot" style="background:${statusColors[i]}"></div>${l} ${statusVals[i]?((statusVals[i]/total*100).toFixed(1)+'%'):''}</div>`).join('');
 
-  const onTimeVals=(d.onTimeByMonth||[]).map(m=>m.onTimePct);
+  const onTimeVals=monthlyTrend.map(m=>m.onTimePct !== undefined ? m.onTimePct : m.deliveryRate);
   makeChart('chart-ontime', { type:'bar', data:{ labels:(d.onTimeByMonth||[]).map(m=>m.month), datasets:[{ data:onTimeVals, backgroundColor:onTimeVals.map(v=>v>=85?'#16A34A':v>=70?'#D97706':'#DC2626'), borderRadius:3 }]}, options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{ y:{min:0,max:100,grid:{color:'rgba(0,0,0,0.04)'},ticks:{font:CHART_FONT,callback:v=>v+'%'}}, x:{grid:{display:false},ticks:{font:CHART_FONT}} }}});
 
   renderCourierTable(d.courierPerformance||[]);
@@ -469,9 +600,24 @@ function renderCancellations() {
   const el = document.getElementById('content');
   const d = state.cancellations;
   if (!d) { el.innerHTML = renderEmpty('breach data', '⚠️'); return; }
-  const k = d.kpis, insight = getAIInsight();
   if (!state.tableSort.key) { state.tableSort.key = 'daysElapsed'; state.tableSort.dir = 'desc'; }
 
+  // Apply date range to shipments for KPIs
+  const bounds = getDateRangeBounds();
+  const filteredShipments = bounds
+    ? (d.shipments||[]).filter(r => {
+        const approxDate = new Date(Date.now() - r.daysElapsed * 86400000);
+        return approxDate >= bounds.from && approxDate <= bounds.to;
+      })
+    : (d.shipments||[]);
+
+  const k = {
+    totalBreaches: filteredShipments.length,
+    deliveryBreaches: filteredShipments.filter(s=>s.breachType==='Delivery overdue').length,
+    rtoBreaches: filteredShipments.filter(s=>s.breachType==='RTO overdue').length,
+    pickupCancellationBreaches: filteredShipments.filter(s=>['Cancellation overdue','Pickup overdue'].includes(s.breachType)).length
+  };
+  const insight = getAIInsight();
   const cities = [...new Set((d.shipments||[]).map(s=>s.city).filter(Boolean))].sort();
 
   el.innerHTML = `
@@ -528,7 +674,17 @@ function renderCancellations() {
 
 function renderCancellationsTable(data) {
   const f = state.tableFilter;
+  const bounds = getDateRangeBounds();
   let rows = data;
+  // Date range filter on daysElapsed (approximate from today)
+  if (bounds) {
+    const nowMs = Date.now();
+    rows = rows.filter(r => {
+      // Reconstruct approximate pickup date from daysElapsed
+      const approxDate = new Date(nowMs - r.daysElapsed * 86400000);
+      return approxDate >= bounds.from && approxDate <= bounds.to;
+    });
+  }
   if (f.awb) rows = rows.filter(r=>r.awb.toLowerCase().includes(f.awb.toLowerCase()));
   if (f.breachType) rows = rows.filter(r=>r.breachType.toLowerCase().includes(f.breachType.toLowerCase()));
   if (f.city) rows = rows.filter(r=>r.city===f.city);
@@ -1127,6 +1283,7 @@ async function init() {
   setupNavigation();
   setupNotifPanel();
   setupUpload();
+  setupDateRangeBar();
   await loadData();
   const lu = state.delivery?.meta?.lastUpdated || state.pickup?.meta?.lastUpdated || state.cancellations?.meta?.lastUpdated;
   if (lu) document.getElementById('sidebar-last-updated').textContent = `Updated ${fmtDate(lu)}`;

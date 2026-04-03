@@ -173,6 +173,85 @@ input, select, textarea { font-family: inherit; }
   overflow: hidden;
 }
 
+/* ── Date range bar ────────────────────────────────────────────────────────── */
+#date-range-bar {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 0 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  flex-shrink: 0;
+}
+.dr-presets {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 0;
+  flex-wrap: wrap;
+}
+.dr-btn {
+  padding: 4px 11px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-2);
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+  white-space: nowrap;
+}
+.dr-btn:hover { background: var(--surface-2); color: var(--text); border-color: var(--border); }
+.dr-btn.active {
+  background: var(--blue);
+  color: #fff;
+  border-color: var(--blue);
+}
+.dr-custom {
+  padding: 6px 0 8px;
+  border-top: 1px solid var(--border);
+}
+.dr-custom-inputs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.dr-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-2);
+}
+.dr-date-input {
+  padding: 5px 9px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r);
+  font-size: 12.5px;
+  color: var(--text);
+  background: var(--surface);
+  outline: none;
+  font-family: inherit;
+  transition: border-color 0.15s;
+}
+.dr-date-input:focus { border-color: var(--blue); }
+.dr-active-label {
+  font-size: 11.5px;
+  color: var(--blue);
+  font-weight: 500;
+  padding: 3px 0 6px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.dr-active-label::before {
+  content: '';
+  width: 6px; height: 6px;
+  background: var(--blue);
+  border-radius: 50%;
+  display: inline-block;
+}
+
 /* ── Top bar ───────────────────────────────────────────────────────────────── */
 #topbar {
   height: var(--topbar-h);

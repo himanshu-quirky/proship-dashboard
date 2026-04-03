@@ -70,6 +70,29 @@
       </div>
     </header>
 
+    <!-- Date range bar -->
+    <div id="date-range-bar">
+      <div class="dr-presets">
+        <button class="dr-btn active" data-preset="all">All time</button>
+        <button class="dr-btn" data-preset="today">Today</button>
+        <button class="dr-btn" data-preset="7d">Last 7 days</button>
+        <button class="dr-btn" data-preset="30d">Last 30 days</button>
+        <button class="dr-btn" data-preset="3m">Last 3 months</button>
+        <button class="dr-btn" data-preset="custom">Custom range</button>
+      </div>
+      <div class="dr-custom hidden" id="dr-custom">
+        <div class="dr-custom-inputs">
+          <label class="dr-label">From</label>
+          <input type="date" id="dr-from" class="dr-date-input">
+          <label class="dr-label">To</label>
+          <input type="date" id="dr-to" class="dr-date-input">
+          <button class="btn btn-primary btn-sm" onclick="applyCustomRange()">Apply</button>
+          <button class="btn btn-outline btn-sm" onclick="clearCustomRange()">Clear</button>
+        </div>
+      </div>
+      <div class="dr-active-label hidden" id="dr-active-label"></div>
+    </div>
+
     <!-- Content -->
     <main id="content">
       <!-- Rendered by app.js -->
