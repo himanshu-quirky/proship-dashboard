@@ -177,11 +177,12 @@ input, select, textarea { font-family: inherit; }
 #date-range-bar {
   background: var(--surface);
   border-bottom: 1px solid var(--border);
-  padding: 0 20px;
+  padding: 0 24px;
   display: flex;
   flex-direction: column;
   gap: 0;
   flex-shrink: 0;
+  z-index: 90;
 }
 .dr-presets {
   display: flex;

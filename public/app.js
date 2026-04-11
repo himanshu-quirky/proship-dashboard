@@ -26,10 +26,42 @@ const state = {
 
 const charts = {};
 
+// ── Auth ─────────────────────────────────────────────────────────────────────
+let _supabaseClient = null;
+let _authToken = null;
+
+async function initAuthGuard() {
+  const config = await fetch('/api/auth/config').then(r => r.json()).catch(() => ({ authEnabled: false }));
+  if (!config.authEnabled) return; // No auth configured — allow access
+
+  // Load Supabase JS
+  await new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js';
+    s.onload = resolve;
+    s.onerror = reject;
+    document.head.appendChild(s);
+  });
+
+  _supabaseClient = window.supabase.createClient(config.supabaseUrl, config.supabaseAnonKey);
+  const { data: { session } } = await _supabaseClient.auth.getSession();
+  if (!session) { window.location.href = '/login'; return; }
+  _authToken = session.access_token;
+
+  // Keep token fresh
+  _supabaseClient.auth.onAuthStateChange((_event, session) => {
+    if (!session) { window.location.href = '/login'; return; }
+    _authToken = session.access_token;
+  });
+}
+
 // ── API ───────────────────────────────────────────────────────────────────────
 async function api(path, opts = {}) {
   try {
-    const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts });
+    const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+    if (_authToken) headers['Authorization'] = `Bearer ${_authToken}`;
+    const res = await fetch(path, { ...opts, headers });
+    if (res.status === 401) { window.location.href = '/login'; return null; }
     return res.ok ? res.json() : null;
   } catch (e) { console.error('API', path, e.message); return null; }
 }
@@ -53,7 +85,8 @@ async function loadData() {
 function setupSSE() {
   let sse;
   function connect() {
-    sse = new EventSource('/api/events');
+    const sseUrl = _authToken ? `/api/events?token=${encodeURIComponent(_authToken)}` : '/api/events';
+    sse = new EventSource(sseUrl);
 
     sse.addEventListener('init', e => {
       const d = JSON.parse(e.data);
@@ -230,10 +263,12 @@ function getDateRangeBounds() {
   const { preset, from, to } = state.dateRange;
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  if (preset === 'today') return { from: today, to: new Date(today.getTime() + 86400000 - 1) };
-  if (preset === '7d')  return { from: new Date(today - 6 * 86400000), to: new Date(today.getTime() + 86400000 - 1) };
-  if (preset === '30d') return { from: new Date(today - 29 * 86400000), to: new Date(today.getTime() + 86400000 - 1) };
-  if (preset === '3m')  return { from: new Date(today - 89 * 86400000), to: new Date(today.getTime() + 86400000 - 1) };
+  const endOfToday = new Date(today.getTime() + 86400000 - 1);
+  if (preset === 'today') return { from: today, to: endOfToday };
+  if (preset === '7d')  return { from: new Date(today - 6 * 86400000), to: endOfToday };
+  if (preset === '30d') return { from: new Date(today - 29 * 86400000), to: endOfToday };
+  if (preset === '3m')  return { from: new Date(today - 89 * 86400000), to: endOfToday };
+  if (preset === '6m')  return { from: new Date(today - 179 * 86400000), to: endOfToday };
   if (preset === 'custom' && from && to) return { from: new Date(from + 'T00:00:00'), to: new Date(to + 'T23:59:59') };
   return null; // 'all' — no filter
 }
@@ -247,13 +282,14 @@ function inDateRange(dateStr) {
   return d >= bounds.from && d <= bounds.to;
 }
 
-function filterMonthlyTrend(trend) {
-  const bounds = getDateRangeBounds();
-  if (!bounds) return trend;
-  return trend.filter(m => {
-    const d = new Date(m.month + ' 2024'); // approximate month parse
-    return true; // monthly trend is approximate — show all, just dim
-  });
+// Parse "Apr '25" or "Dec '24" month labels into a Date (1st of that month)
+function parseMonthLabel(label) {
+  const months = { jan:0, feb:1, mar:2, apr:3, may:4, jun:5, jul:6, aug:7, sep:8, oct:9, nov:10, dec:11 };
+  const m = label.match(/^(\w{3})\s*'(\d{2})$/);
+  if (!m) return null;
+  const mi = months[m[1].toLowerCase()];
+  if (mi === undefined) return null;
+  return new Date(2000 + parseInt(m[2]), mi, 1);
 }
 
 function filterShipments(shipments) {
@@ -300,7 +336,7 @@ function setupDateRangeBar() {
           activeLabel.classList.add('hidden');
         } else {
           activeLabel.classList.remove('hidden');
-          const labels = { today: 'Showing: Today', '7d': 'Showing: Last 7 days', '30d': 'Showing: Last 30 days', '3m': 'Showing: Last 3 months' };
+          const labels = { today: 'Showing: Today', '7d': 'Showing: Last 7 days', '30d': 'Showing: Last 30 days', '3m': 'Showing: Last 3 months', '6m': 'Showing: Last 6 months' };
           activeLabel.textContent = labels[preset] || '';
         }
         renderCurrentView();
@@ -413,8 +449,11 @@ function renderDelivery() {
   const bounds = getDateRangeBounds();
   const monthlyTrend = bounds
     ? (d.monthlyTrend || []).filter(m => {
-        // Parse "Apr '25" style month labels
-        try { const dt = new Date(m.month.replace("'", "20")); return !isNaN(dt) ? (dt >= bounds.from && dt <= bounds.to) : true; } catch(_) { return true; }
+        const dt = parseMonthLabel(m.month);
+        if (!dt) return true;
+        // Include month if any part of it overlaps with the filter range
+        const monthEnd = new Date(dt.getFullYear(), dt.getMonth() + 1, 0, 23, 59, 59);
+        return monthEnd >= bounds.from && dt <= bounds.to;
       })
     : (d.monthlyTrend || []);
 
@@ -1279,6 +1318,7 @@ function toast(msg, type = 'info') {
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 async function init() {
+  await initAuthGuard();
   setupSSE();
   setupNavigation();
   setupNotifPanel();

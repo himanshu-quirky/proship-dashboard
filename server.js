@@ -6,12 +6,53 @@ const cheerio = require('cheerio');
 const fs = require('fs');
 const path = require('path');
 const cron = require('node-cron');
+const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// ── Supabase ─────────────────────────────────────────────────────────────────
+const SUPABASE_URL = process.env.SUPABASE_URL || '';
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || '';
+const supabase = SUPABASE_URL && SUPABASE_ANON_KEY
+  ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+  : null;
+
+// Auth middleware — checks Authorization header for Supabase JWT
+async function requireAuth(req, res, next) {
+  if (!supabase) return next(); // Skip auth if Supabase not configured
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!token) return res.status(401).json({ error: 'Unauthorized' });
+  const { data: { user }, error } = await supabase.auth.getUser(token);
+  if (error || !user) return res.status(401).json({ error: 'Invalid or expired token' });
+  req.user = user;
+  next();
+}
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Serve login page (no auth required)
+app.get('/login', (req, res) => res.sendFile(path.join(__dirname, 'public', 'login.html')));
+app.get('/login.css', (req, res) => res.sendFile(path.join(__dirname, 'public', 'login.css')));
+app.get('/login.js', (req, res) => res.sendFile(path.join(__dirname, 'public', 'login.js')));
+
+// Auth config endpoint (public — provides Supabase URL/key to frontend)
+app.get('/api/auth/config', (req, res) => {
+  res.json({
+    supabaseUrl: SUPABASE_URL,
+    supabaseAnonKey: SUPABASE_ANON_KEY,
+    authEnabled: !!(supabase)
+  });
+});
+
+// Serve dashboard page — redirect to login if auth is enabled
+app.get('/', (req, res, next) => {
+  if (!supabase) return next(); // No auth — serve normally
+  // Let the frontend handle auth check via JS
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -210,6 +251,16 @@ function getProship() {
 }
 
 // ── Routes ────────────────────────────────────────────────────────────────────
+
+// Protect all API routes (except /api/auth/*) with auth middleware
+app.use('/api', (req, res, next) => {
+  if (req.path.startsWith('/auth/')) return next();
+  // SSE: accept token from query string since EventSource can't set headers
+  if (!req.headers.authorization && req.query.token) {
+    req.headers.authorization = `Bearer ${req.query.token}`;
+  }
+  requireAuth(req, res, next);
+});
 
 // SSE
 app.get('/api/events', (req, res) => {

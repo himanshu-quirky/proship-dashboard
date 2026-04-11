@@ -8,6 +8,7 @@
     "dev": "nodemon server.js"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.103.0",
     "@whiskeysockets/baileys": "^6.7.16",
     "cheerio": "^1.0.0",
     "dotenv": "^16.3.1",

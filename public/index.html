@@ -78,14 +78,15 @@
         <button class="dr-btn" data-preset="7d">Last 7 days</button>
         <button class="dr-btn" data-preset="30d">Last 30 days</button>
         <button class="dr-btn" data-preset="3m">Last 3 months</button>
+        <button class="dr-btn" data-preset="6m">Last 6 months</button>
         <button class="dr-btn" data-preset="custom">Custom range</button>
       </div>
       <div class="dr-custom hidden" id="dr-custom">
         <div class="dr-custom-inputs">
           <label class="dr-label">From</label>
-          <input type="date" id="dr-from" class="dr-date-input">
+          <input type="date" id="dr-from" class="dr-date-input" min="2024-01-01">
           <label class="dr-label">To</label>
-          <input type="date" id="dr-to" class="dr-date-input">
+          <input type="date" id="dr-to" class="dr-date-input" min="2024-01-01">
           <button class="btn btn-primary btn-sm" onclick="applyCustomRange()">Apply</button>
           <button class="btn btn-outline btn-sm" onclick="clearCustomRange()">Clear</button>
         </div>
