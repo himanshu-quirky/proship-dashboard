@@ -284,13 +284,33 @@ function inDateRange(dateStr) {
 }
 
 // Parse "Apr '25" or "Dec '24" month labels into a Date (1st of that month)
+// Parse month labels like "Apr '25", "Apr 25", "Apr 2025", "April 2025"
 function parseMonthLabel(label) {
+  if (!label) return null;
   const months = { jan:0, feb:1, mar:2, apr:3, may:4, jun:5, jul:6, aug:7, sep:8, oct:9, nov:10, dec:11 };
-  const m = label.match(/^(\w{3})\s*'(\d{2})$/);
+  // Strip apostrophes, accept 3-letter prefix + 2 or 4 digit year
+  const cleaned = String(label).replace(/'/g, '').trim();
+  const m = cleaned.match(/^([A-Za-z]{3,})[\s\-\/]+(\d{2,4})$/);
   if (!m) return null;
-  const mi = months[m[1].toLowerCase()];
+  const mi = months[m[1].slice(0,3).toLowerCase()];
   if (mi === undefined) return null;
-  return new Date(2000 + parseInt(m[2]), mi, 1);
+  const y = parseInt(m[2], 10);
+  const year = y < 100 ? 2000 + y : y;
+  return new Date(year, mi, 1);
+}
+
+// Return the overlap fraction (0..1) between a month and the filter bounds.
+// This lets us scale a month's volume proportionally when only part of the
+// month falls within the filter range (e.g. "Last 30 days").
+function monthOverlapFraction(monthStart, bounds) {
+  if (!bounds) return 1;
+  const monthEnd = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0, 23, 59, 59, 999);
+  const daysInMonth = (monthEnd - monthStart) / 86400000 + 1/86400; // + tiny to avoid /0
+  const overlapStart = Math.max(monthStart.getTime(), bounds.from.getTime());
+  const overlapEnd   = Math.min(monthEnd.getTime(),   bounds.to.getTime());
+  if (overlapEnd < overlapStart) return 0;
+  const overlapDays = (overlapEnd - overlapStart) / 86400000 + 1/86400;
+  return Math.max(0, Math.min(1, overlapDays / daysInMonth));
 }
 
 function filterShipments(shipments) {
@@ -454,42 +474,46 @@ function renderDelivery() {
   if (!d) { el.innerHTML = renderEmpty('delivery data', '📦'); return; }
   const insight = getAIInsight();
 
-  // Apply date range filter to monthly trend
+  // Apply date range filter to monthly trend with proportional scaling.
+  // Partial-month overlaps (e.g. "Last 30 days" crossing mid-month) are scaled
+  // by the fraction of days that actually fall within the filter range.
   const bounds = getDateRangeBounds();
   const allMonthly = d.monthlyTrend || [];
+
+  // Compute per-month overlap fraction + volume contribution
+  const monthBuckets = allMonthly.map(m => {
+    const dt = parseMonthLabel(m.month);
+    const frac = bounds ? (dt ? monthOverlapFraction(dt, bounds) : 1) : 1;
+    return { ...m, _date: dt, _frac: frac, _volume: Math.round((m.volume||0) * frac) };
+  });
+
+  // Monthly trend shown in chart = only months with non-zero overlap
   const monthlyTrend = bounds
-    ? allMonthly.filter(m => {
-        const dt = parseMonthLabel(m.month);
-        if (!dt) return true;
-        const monthEnd = new Date(dt.getFullYear(), dt.getMonth() + 1, 0, 23, 59, 59);
-        return monthEnd >= bounds.from && dt <= bounds.to;
-      })
+    ? monthBuckets.filter(m => m._frac > 0).map(m => ({ ...m, volume: m._volume }))
     : allMonthly;
 
-  // Filter on-time by month using same logic
+  // Filter on-time by month with the same overlap logic
   const onTimeByMonth = bounds
     ? (d.onTimeByMonth || []).filter(m => {
         const dt = parseMonthLabel(m.month);
-        if (!dt) return true;
-        const monthEnd = new Date(dt.getFullYear(), dt.getMonth() + 1, 0, 23, 59, 59);
-        return monthEnd >= bounds.from && dt <= bounds.to;
+        return !dt || monthOverlapFraction(dt, bounds) > 0;
       })
     : (d.onTimeByMonth || []);
 
-  // Compute month-range label for the KPI subtext (e.g. "Dec – Mar")
-  const rangeLabel = monthlyTrend.length
-    ? `${monthlyTrend[0].month.split("'")[0].trim()} – ${monthlyTrend[monthlyTrend.length-1].month.split("'")[0].trim()}`
-    : 'All months';
+  // Range label for the KPI subtext
+  const rangeLabel = (() => {
+    if (!bounds) return 'All data';
+    const fmt = dt => dt.toLocaleString('en-IN', { month: 'short', year: 'numeric' });
+    return `${fmt(bounds.from)} – ${fmt(bounds.to)}`;
+  })();
 
-  // Recalculate KPIs from filtered monthly data when a filter is active
+  // Recalculate all KPIs from the scaled month buckets
   let k = d.kpis;
-  const filterActive = bounds && monthlyTrend.length;
-  const originalTotal = allMonthly.reduce((a, m) => a + (m.volume||0), 0) || 1;
-  const filtTotal = monthlyTrend.reduce((a, m) => a + (m.volume||0), 0);
-  const scale = filterActive && originalTotal ? filtTotal / originalTotal : 1;
+  const filterActive = !!bounds;
 
   if (filterActive) {
-    const filtDelivered = monthlyTrend.reduce((a, m) => a + Math.round((m.volume||0) * (m.deliveryRate||0) / 100), 0);
+    const filtTotal = monthBuckets.reduce((a, m) => a + m._volume, 0);
+    const filtDelivered = monthBuckets.reduce((a, m) => a + Math.round(m._volume * (m.deliveryRate||0) / 100), 0);
     const filtOnTime = onTimeByMonth.length
       ? parseFloat((onTimeByMonth.reduce((a,m) => a + (m.onTimePct||0), 0) / onTimeByMonth.length).toFixed(1))
       : d.kpis.onTimeDelivery;
@@ -501,6 +525,10 @@ function renderDelivery() {
       onTimeDelivery: filtOnTime
     };
   }
+  // Scale used downstream for status donut / TAT bars / courier counts
+  const originalTotal = allMonthly.reduce((a, m) => a + (m.volume||0), 0) || 1;
+  const filtTotalForScale = filterActive ? k.totalShipments : originalTotal;
+  const scale = filterActive ? filtTotalForScale / originalTotal : 1;
 
   // Scale status breakdown and TAT distribution by filter ratio
   const sb = d.statusBreakdown || {};
