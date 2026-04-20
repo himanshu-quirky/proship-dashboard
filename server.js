@@ -361,7 +361,11 @@ app.get('/api/settings', (req, res) => res.json(store.settings));
 
 app.post('/api/settings', (req, res) => {
   const allowed = ['breachThreshold', 'notificationMode', 'slackWebhook', 'waRecipients', 'proshipUsername', 'proshipPassword', 'pollIntervalMinutes'];
+  const prevSlack = store.settings.slackWebhook;
   allowed.forEach(k => { if (req.body[k] !== undefined) store.settings[k] = req.body[k]; });
+  if (req.body.slackWebhook !== undefined && req.body.slackWebhook !== prevSlack) {
+    store.settings.slackLastUpdated = new Date().toISOString();
+  }
   if (req.body.breachThreshold) store.settings.breachThreshold = parseInt(req.body.breachThreshold);
   if (req.body.pollIntervalMinutes) store.settings.pollIntervalMinutes = parseInt(req.body.pollIntervalMinutes);
   saveStore();
@@ -433,6 +437,39 @@ app.post('/api/whatsapp/disconnect', async (req, res) => {
   saveStore();
   sendSSE('waStatus', { connected: false });
   res.json({ ok: true });
+});
+
+// ── Slack ─────────────────────────────────────────────────────────────────────
+const Slack = require('./src/slack');
+const dashUrl = () => process.env.DASHBOARD_URL || `http://localhost:${PORT}`;
+
+// Test Slack webhook — sends a friendly confirmation message
+app.post('/api/slack/test', async (req, res) => {
+  const webhook = (req.body && req.body.webhook) || store.settings.slackWebhook;
+  if (!webhook) return res.status(400).json({ ok: false, error: 'Slack webhook URL is required' });
+  const result = await Slack.send(webhook, '✅ Prozoship · Slack connected', Slack.buildTestBlocks(dashUrl()));
+  res.json(result);
+});
+
+// Send daily digest to Slack on demand
+app.post('/api/slack/digest', async (req, res) => {
+  const webhook = store.settings.slackWebhook;
+  if (!webhook) return res.status(400).json({ ok: false, error: 'Configure Slack webhook in Settings first' });
+  const blocks = Slack.buildDigestBlocks({ store, dashboardUrl: dashUrl() });
+  const result = await Slack.send(webhook, '☀️ Prozoship Daily Digest', blocks);
+  res.json(result);
+});
+
+// Report Slack configuration status
+app.get('/api/slack/status', (req, res) => {
+  const w = store.settings.slackWebhook || '';
+  // Redact the webhook, showing only the last segment which identifies the channel
+  const redacted = w ? w.replace(/^(https:\/\/hooks\.slack\.com\/services\/)(.{4}).+(.{6})$/, '$1$2••••••••••$3') : '';
+  res.json({
+    configured: !!w,
+    redacted,
+    lastUpdated: store.settings.slackLastUpdated || null
+  });
 });
 
 // Prozo webhook receiver

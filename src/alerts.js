@@ -47,9 +47,12 @@ async function checkAndNotify(store, sendSSE) {
     newAWBs.forEach(awb => notifiedBreaches.add(awb));
 
     const totalBreaches = store.cancellations?.kpis?.totalBreaches || 0;
+    const allShipments = store.cancellations?.shipments || [];
+    const newShipments = allShipments.filter(s => newAWBs.includes(s.awb));
     const alertPayload = {
       newBreaches: newAWBs.length,
       awbs: newAWBs,
+      shipments: newShipments,
       totalBreaches,
       dashboardUrl: process.env.DASHBOARD_URL || `http://localhost:${process.env.PORT || 3000}`
     };
