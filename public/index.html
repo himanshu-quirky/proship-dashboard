@@ -17,21 +17,26 @@
     <div class="sidebar-header">
       <div class="sidebar-logo">
         <div class="logo-mark">P</div>
-        <span class="logo-text">Prozoship</span>
+        <div>
+          <div class="logo-text">Prozoship</div>
+          <div class="logo-sub">MIS DASHBOARD</div>
+        </div>
       </div>
     </div>
+    <div class="nav-section-label">REPORTS</div>
     <nav class="sidebar-nav">
       <a class="nav-item active" data-view="delivery" href="#">
-        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M20 7H4a2 2 0 00-2 2v10a2 2 0 002 2h16a2 2 0 002-2V9a2 2 0 00-2-2z"/><path d="M16 3l4 4-4 4M8 3L4 7l4 4"/></svg>
-        <span>Delivery Report</span>
+        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M3 3h7v9H3zM14 3h7v5h-7zM14 12h7v9h-7zM3 16h7v5H3z"/></svg>
+        <span>Summary</span>
       </a>
       <a class="nav-item" data-view="pickup" href="#">
-        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M12 2l3 7h7l-5.5 4 2 7L12 16l-6.5 4 2-7L2 9h7z"/></svg>
-        <span>Pickup Report</span>
+        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        <span>Pending Shipments</span>
       </a>
       <a class="nav-item" data-view="cancellations" href="#">
-        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M4.93 4.93l14.14 14.14"/></svg>
-        <span>Cancellations &amp; Returns</span>
+        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>
+        <span>Actions</span>
+        <span id="nav-actions-count" class="nav-count hidden">0</span>
       </a>
       <a class="nav-item" data-view="broadcast" href="#">
         <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 013.07 9.8 19.79 19.79 0 01.1 1.18 2 2 0 012.09 0h3a2 2 0 012 1.72 12.84 12.84 0 00.7 2.81 2 2 0 01-.45 2.11L6.09 7.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45 12.84 12.84 0 002.81.7A2 2 0 0122 14.92z"/></svg>
@@ -70,26 +75,25 @@
       </div>
     </header>
 
-    <!-- Date range bar -->
-    <div id="date-range-bar">
-      <div class="dr-presets">
-        <button class="dr-btn active" data-preset="all">All time</button>
-        <button class="dr-btn" data-preset="today">Today</button>
-        <button class="dr-btn" data-preset="7d">Last 7 days</button>
-        <button class="dr-btn" data-preset="30d">Last 30 days</button>
-        <button class="dr-btn" data-preset="3m">Last 3 months</button>
-        <button class="dr-btn" data-preset="6m">Last 6 months</button>
-        <button class="dr-btn" data-preset="custom">Custom range</button>
+    <!-- Date range bar (only visible on Summary view) -->
+    <div id="date-range-bar" class="hidden">
+      <div class="dr-left">
+        <span class="dr-title">Date range:</span>
+        <div class="dr-presets">
+          <button class="dr-btn active" data-preset="all">All time</button>
+          <button class="dr-btn" data-preset="30d">Last 30 days</button>
+          <button class="dr-btn" data-preset="3m">Last 3 months</button>
+          <button class="dr-btn" data-preset="6m">Last 6 months</button>
+          <button class="dr-btn" data-preset="custom">Custom</button>
+        </div>
       </div>
       <div class="dr-custom hidden" id="dr-custom">
-        <div class="dr-custom-inputs">
-          <label class="dr-label">From</label>
-          <input type="date" id="dr-from" class="dr-date-input" min="2024-01-01">
-          <label class="dr-label">To</label>
-          <input type="date" id="dr-to" class="dr-date-input" min="2024-01-01">
-          <button class="btn btn-primary btn-sm" onclick="applyCustomRange()">Apply</button>
-          <button class="btn btn-outline btn-sm" onclick="clearCustomRange()">Clear</button>
-        </div>
+        <label class="dr-label">From</label>
+        <input type="date" id="dr-from" class="dr-date-input" min="2025-12-01">
+        <label class="dr-label">To</label>
+        <input type="date" id="dr-to" class="dr-date-input" min="2025-12-01">
+        <button class="btn btn-primary btn-sm" onclick="applyCustomRange()">Apply</button>
+        <button class="btn btn-outline btn-sm" onclick="clearCustomRange()">Clear</button>
       </div>
       <div class="dr-active-label hidden" id="dr-active-label"></div>
     </div>

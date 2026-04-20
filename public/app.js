@@ -238,6 +238,7 @@ function setView(view) {
 }
 
 function renderCurrentView() {
+  updateDateRangeBarVisibility();
   if (state.view === 'delivery') renderDelivery();
   else if (state.view === 'pickup') renderPickup();
   else if (state.view === 'cancellations') renderCancellations();
@@ -321,11 +322,11 @@ function setupDateRangeBar() {
       const activeLabel = document.getElementById('dr-active-label');
       if (preset === 'custom') {
         customPanel.classList.remove('hidden');
-        // Set default to last 30 days if empty
+        activeLabel.classList.add('hidden');
+        // Set default to since Dec 1 2025 if empty
         if (!document.getElementById('dr-from').value) {
           const to = new Date();
-          const from = new Date(to - 29 * 86400000);
-          document.getElementById('dr-from').value = from.toISOString().slice(0, 10);
+          document.getElementById('dr-from').value = '2025-12-01';
           document.getElementById('dr-to').value = to.toISOString().slice(0, 10);
         }
       } else {
@@ -336,13 +337,21 @@ function setupDateRangeBar() {
           activeLabel.classList.add('hidden');
         } else {
           activeLabel.classList.remove('hidden');
-          const labels = { today: 'Showing: Today', '7d': 'Showing: Last 7 days', '30d': 'Showing: Last 30 days', '3m': 'Showing: Last 3 months', '6m': 'Showing: Last 6 months' };
+          const labels = { '30d': 'Last 30 days', '3m': 'Last 3 months', '6m': 'Last 6 months' };
           activeLabel.textContent = labels[preset] || '';
         }
         renderCurrentView();
       }
     });
   });
+}
+
+// Show/hide date range bar based on current view (only visible on Summary)
+function updateDateRangeBarVisibility() {
+  const bar = document.getElementById('date-range-bar');
+  if (!bar) return;
+  if (state.view === 'delivery') bar.classList.remove('hidden');
+  else bar.classList.add('hidden');
 }
 
 function applyCustomRange() {
@@ -438,7 +447,7 @@ function renderEmpty(label, icon = '📂') {
   </div>`;
 }
 
-// ── DELIVERY ──────────────────────────────────────────────────────────────────
+// ── SUMMARY (Delivery) ────────────────────────────────────────────────────────
 function renderDelivery() {
   const el = document.getElementById('content');
   const d = state.delivery;
@@ -447,38 +456,77 @@ function renderDelivery() {
 
   // Apply date range filter to monthly trend
   const bounds = getDateRangeBounds();
+  const allMonthly = d.monthlyTrend || [];
   const monthlyTrend = bounds
-    ? (d.monthlyTrend || []).filter(m => {
+    ? allMonthly.filter(m => {
         const dt = parseMonthLabel(m.month);
         if (!dt) return true;
-        // Include month if any part of it overlaps with the filter range
         const monthEnd = new Date(dt.getFullYear(), dt.getMonth() + 1, 0, 23, 59, 59);
         return monthEnd >= bounds.from && dt <= bounds.to;
       })
-    : (d.monthlyTrend || []);
+    : allMonthly;
 
-  // Recalculate KPIs from filtered monthly data if filter is active
+  // Filter on-time by month using same logic
+  const onTimeByMonth = bounds
+    ? (d.onTimeByMonth || []).filter(m => {
+        const dt = parseMonthLabel(m.month);
+        if (!dt) return true;
+        const monthEnd = new Date(dt.getFullYear(), dt.getMonth() + 1, 0, 23, 59, 59);
+        return monthEnd >= bounds.from && dt <= bounds.to;
+      })
+    : (d.onTimeByMonth || []);
+
+  // Compute month-range label for the KPI subtext (e.g. "Dec – Mar")
+  const rangeLabel = monthlyTrend.length
+    ? `${monthlyTrend[0].month.split("'")[0].trim()} – ${monthlyTrend[monthlyTrend.length-1].month.split("'")[0].trim()}`
+    : 'All months';
+
+  // Recalculate KPIs from filtered monthly data when a filter is active
   let k = d.kpis;
-  if (bounds && monthlyTrend.length && monthlyTrend.length < (d.monthlyTrend || []).length) {
-    const filtTotal = monthlyTrend.reduce((a, m) => a + m.volume, 0);
-    const filtDelivered = monthlyTrend.reduce((a, m) => a + Math.round(m.volume * m.deliveryRate / 100), 0);
+  const filterActive = bounds && monthlyTrend.length;
+  const originalTotal = allMonthly.reduce((a, m) => a + (m.volume||0), 0) || 1;
+  const filtTotal = monthlyTrend.reduce((a, m) => a + (m.volume||0), 0);
+  const scale = filterActive && originalTotal ? filtTotal / originalTotal : 1;
+
+  if (filterActive) {
+    const filtDelivered = monthlyTrend.reduce((a, m) => a + Math.round((m.volume||0) * (m.deliveryRate||0) / 100), 0);
+    const filtOnTime = onTimeByMonth.length
+      ? parseFloat((onTimeByMonth.reduce((a,m) => a + (m.onTimePct||0), 0) / onTimeByMonth.length).toFixed(1))
+      : d.kpis.onTimeDelivery;
     k = {
       ...d.kpis,
       totalShipments: filtTotal,
       deliveredCount: filtDelivered,
-      deliveryRate: filtTotal ? parseFloat((filtDelivered / filtTotal * 100).toFixed(1)) : 0
+      deliveryRate: filtTotal ? parseFloat((filtDelivered / filtTotal * 100).toFixed(1)) : 0,
+      onTimeDelivery: filtOnTime
     };
   }
+
+  // Scale status breakdown and TAT distribution by filter ratio
+  const sb = d.statusBreakdown || {};
+  const scaledStatus = filterActive ? {
+    delivered: Math.round((sb.delivered||0) * scale),
+    rto: Math.round((sb.rto||0) * scale),
+    cancelled: Math.round((sb.cancelled||0) * scale),
+    lost: Math.round((sb.lost||0) * scale),
+    active: Math.round((sb.active||0) * scale)
+  } : sb;
+  const scaledTAT = filterActive
+    ? (d.tatDistribution||[]).map(t => ({ ...t, count: Math.round((t.count||0) * scale) }))
+    : (d.tatDistribution||[]);
+  const scaledCourier = filterActive
+    ? (d.courierPerformance||[]).map(c => ({ ...c, shipments: Math.round((c.shipments||0) * scale) }))
+    : (d.courierPerformance||[]);
 
   el.innerHTML = `
     <div class="view-header">
       <div>
-        <div class="view-title">Delivery Report</div>
-        <div class="view-meta">Last updated ${fmtDate(d.meta.lastUpdated)} · ${esc(d.meta.source || 'Manual upload')}</div>
+        <div class="view-title">Summary</div>
+        <div class="view-meta">${filterActive ? `Filtered · ${rangeLabel}` : 'No data loaded'}</div>
       </div>
       <div class="view-actions">
-        <button class="btn btn-outline btn-sm" onclick="triggerSync()">↻ Refresh</button>
-        <button class="btn btn-outline btn-sm" onclick="triggerAnalyze()">Run AI Analysis</button>
+        <button class="btn btn-outline btn-sm" onclick="triggerAnalyze()"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg> AI Analysis</button>
+        <button class="btn btn-primary btn-sm" onclick="openUploadModal()"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload MIS (.xlsx)</button>
       </div>
     </div>
 
@@ -486,24 +534,24 @@ function renderDelivery() {
 
     <div class="kpi-row">
       <div class="kpi-card">
-        <div class="kpi-label">Total Shipments</div>
+        <div class="kpi-label">TOTAL SHIPMENTS</div>
         <div class="kpi-value">${num(k.totalShipments)}</div>
-        <div class="kpi-sub">All couriers</div>
+        <div class="kpi-sub">${rangeLabel}</div>
       </div>
       <div class="kpi-card">
-        <div class="kpi-label">Delivery Rate</div>
+        <div class="kpi-label">DELIVERY RATE</div>
         <div class="kpi-value ${k.deliveryRate >= 95 ? 'green' : k.deliveryRate >= 90 ? 'amber' : 'red'}">${k.deliveryRate}%</div>
-        <div class="kpi-sub">${num(k.deliveredCount)} delivered</div>
+        <div class="kpi-sub">delivered</div>
       </div>
       <div class="kpi-card">
-        <div class="kpi-label">Avg TAT</div>
-        <div class="kpi-value blue">${k.avgTAT}<span style="font-size:14px;font-weight:400;margin-left:2px">days</span></div>
-        <div class="kpi-sub">Pickup to delivery</div>
+        <div class="kpi-label">AVG TAT</div>
+        <div class="kpi-value">${k.avgTAT}</div>
+        <div class="kpi-sub">Median — days</div>
       </div>
       <div class="kpi-card">
-        <div class="kpi-label">On-Time Delivery</div>
+        <div class="kpi-label">ON-TIME VS EDD</div>
         <div class="kpi-value ${k.onTimeDelivery >= 85 ? 'green' : k.onTimeDelivery >= 70 ? 'amber' : 'red'}">${k.onTimeDelivery}%</div>
-        <div class="kpi-sub">vs EDD</div>
+        <div class="kpi-sub">vs estimated delivery date</div>
       </div>
     </div>
 
@@ -511,28 +559,27 @@ function renderDelivery() {
 
     <div class="chart-grid">
       <div class="chart-card">
-        <div class="chart-card-title">Monthly Volume &amp; Delivery Rate</div>
+        <div class="chart-card-title">MONTHLY VOLUME &amp; DELIVERY RATE</div>
         <div class="chart-wrap"><canvas id="chart-monthly"></canvas></div>
       </div>
       <div class="chart-card">
-        <div class="chart-card-title">TAT Distribution</div>
+        <div class="chart-card-title">TAT DISTRIBUTION (DAYS)</div>
         <div class="chart-wrap"><canvas id="chart-tat"></canvas></div>
       </div>
       <div class="chart-card">
-        <div class="chart-card-title">Shipment Status</div>
+        <div class="chart-card-title">SHIPMENT STATUS BREAKDOWN</div>
         <div class="chart-wrap chart-wrap-sm"><canvas id="chart-status"></canvas></div>
         <div id="status-legend" class="donut-legend"></div>
       </div>
       <div class="chart-card">
-        <div class="chart-card-title">On-Time % by Month</div>
+        <div class="chart-card-title">ON-TIME % BY MONTH</div>
         <div class="chart-wrap"><canvas id="chart-ontime"></canvas></div>
       </div>
     </div>
 
     <div class="section-card">
       <div class="section-card-header">
-        <span class="section-card-title">Courier Performance</span>
-        <span class="section-card-count">${d.courierPerformance.length} partners</span>
+        <span class="section-card-title">Courier Partner Performance</span>
       </div>
       <div class="table-scroll" id="courier-table-wrap"></div>
     </div>`;
@@ -541,24 +588,23 @@ function renderDelivery() {
 
   const months = monthlyTrend.map(m=>m.month);
   makeChart('chart-monthly', { type:'bar', data:{ labels:months, datasets:[
-    { label:'Shipments', data:monthlyTrend.map(m=>m.volume), backgroundColor:'#0F172A', yAxisID:'y', borderRadius:3 },
-    { label:'Delivery %', data:monthlyTrend.map(m=>m.deliveryRate), type:'line', borderColor:'#16A34A', backgroundColor:'transparent', yAxisID:'y1', tension:0.3, pointRadius:3, pointBackgroundColor:'#16A34A' }
-  ]}, options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{ y:{grid:{color:'rgba(0,0,0,0.04)'},ticks:{font:CHART_FONT}}, y1:{position:'right',min:60,max:100,grid:{display:false},ticks:{font:CHART_FONT,callback:v=>v+'%'}}, x:{grid:{display:false},ticks:{font:CHART_FONT}} }}});
+    { label:'Shipments', data:monthlyTrend.map(m=>m.volume), backgroundColor:'#D4A373', yAxisID:'y', borderRadius:3 },
+    { label:'Delivery Rate %', data:monthlyTrend.map(m=>m.deliveryRate), type:'line', borderColor:'#2D6A4F', backgroundColor:'transparent', yAxisID:'y1', tension:0.3, pointRadius:4, pointBackgroundColor:'#2D6A4F' }
+  ]}, options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:true, labels:{font:CHART_FONT, boxWidth:12, usePointStyle:true}}}, scales:{ y:{grid:{color:'rgba(0,0,0,0.04)'},ticks:{font:CHART_FONT}}, y1:{position:'right',min:0,max:100,grid:{display:false},ticks:{font:CHART_FONT,callback:v=>v+'%'}}, x:{grid:{display:false},ticks:{font:CHART_FONT}} }}});
 
-  makeChart('chart-tat', { type:'bar', data:{ labels:(d.tatDistribution||[]).map(t=>t.days), datasets:[{ data:(d.tatDistribution||[]).map(t=>t.count), backgroundColor:'#2563EB', borderRadius:3 }]}, options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{ y:{grid:{color:'rgba(0,0,0,0.04)'},ticks:{font:CHART_FONT}}, x:{title:{display:true,text:'Days',font:CHART_FONT},grid:{display:false},ticks:{font:CHART_FONT}} }}});
+  makeChart('chart-tat', { type:'bar', data:{ labels:scaledTAT.map(t=>t.days), datasets:[{ data:scaledTAT.map(t=>t.count), backgroundColor:'#2D6A4F', borderRadius:3 }]}, options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{ y:{grid:{color:'rgba(0,0,0,0.04)'},ticks:{font:CHART_FONT}}, x:{grid:{display:false},ticks:{font:CHART_FONT}} }}});
 
-  const sb = d.statusBreakdown||{};
   const statusLabels=['Delivered','RTO','Cancelled','Lost','Active'];
-  const statusVals=[sb.delivered,sb.rto,sb.cancelled,sb.lost,sb.active];
-  const statusColors=['#16A34A','#D97706','#64748B','#DC2626','#2563EB'];
+  const statusVals=[scaledStatus.delivered,scaledStatus.rto,scaledStatus.cancelled,scaledStatus.lost,scaledStatus.active];
+  const statusColors=['#2D6A4F','#B91C1C','#D4A373','#334155','#3B82F6'];
   makeChart('chart-status', { type:'doughnut', data:{ labels:statusLabels, datasets:[{ data:statusVals, backgroundColor:statusColors, borderWidth:0 }]}, options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, cutout:'64%' }});
-  const total = statusVals.reduce((a,b)=>(a||0)+(b||0),0)||1;
-  document.getElementById('status-legend').innerHTML = statusLabels.map((l,i)=>`<div class="legend-item"><div class="legend-dot" style="background:${statusColors[i]}"></div>${l} ${statusVals[i]?((statusVals[i]/total*100).toFixed(1)+'%'):''}</div>`).join('');
+  document.getElementById('status-legend').innerHTML = statusLabels.map((l,i)=>`<div class="legend-item"><div class="legend-dot" style="background:${statusColors[i]}"></div>${l}</div>`).join('');
 
-  const onTimeVals=monthlyTrend.map(m=>m.onTimePct !== undefined ? m.onTimePct : m.deliveryRate);
-  makeChart('chart-ontime', { type:'bar', data:{ labels:(d.onTimeByMonth||[]).map(m=>m.month), datasets:[{ data:onTimeVals, backgroundColor:onTimeVals.map(v=>v>=85?'#16A34A':v>=70?'#D97706':'#DC2626'), borderRadius:3 }]}, options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{ y:{min:0,max:100,grid:{color:'rgba(0,0,0,0.04)'},ticks:{font:CHART_FONT,callback:v=>v+'%'}}, x:{grid:{display:false},ticks:{font:CHART_FONT}} }}});
+  const onTimeLabels = onTimeByMonth.map(m=>m.month);
+  const onTimeVals = onTimeByMonth.map(m=>m.onTimePct || 0);
+  makeChart('chart-ontime', { type:'bar', data:{ labels:onTimeLabels, datasets:[{ data:onTimeVals, backgroundColor:'#D4A373', borderRadius:3 }]}, options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{ y:{min:0,max:100,grid:{color:'rgba(0,0,0,0.04)'},ticks:{font:CHART_FONT,callback:v=>v+'%'}}, x:{grid:{display:false},ticks:{font:CHART_FONT}} }}});
 
-  renderCourierTable(d.courierPerformance||[]);
+  renderCourierTable(scaledCourier);
 }
 
 function renderCourierTable(data) {
@@ -574,48 +620,72 @@ function renderCourierTable(data) {
   wrap.querySelector('thead').addEventListener('click', handleSort);
 }
 
-// ── PICKUP ────────────────────────────────────────────────────────────────────
+// ── PENDING SHIPMENTS (Pickup) ────────────────────────────────────────────────
 function renderPickup() {
   const el = document.getElementById('content');
   const d = state.pickup;
   if (!d) { el.innerHTML = renderEmpty('pickup data', '📦'); return; }
   const k = d.kpis, insight = getAIInsight();
   const filter = state.tableFilter.slaStatus || 'all';
+  const breachPct = k.totalPending ? (k.slaBreached/k.totalPending*100) : 0;
+  const pipelinePct = k.totalPending ? (k.normalPipeline/k.totalPending*100) : 0;
+
+  // Count in-transit / picked up shipments from statusBreakdown
+  const sb = d.statusBreakdown || [];
+  const inTransitRow = sb.find(r => /transit/i.test(r.status));
+  const pickedUpRow = sb.find(r => /picked up/i.test(r.status));
 
   el.innerHTML = `
     <div class="view-header">
       <div>
-        <div class="view-title">Pickup Report</div>
-        <div class="view-meta">Last updated ${fmtDate(d.meta.lastUpdated)}</div>
-      </div>
-      <div class="view-actions">
-        <button class="btn btn-outline btn-sm" onclick="triggerSync()">↻ Refresh</button>
+        <div class="view-title">Pending Shipments</div>
+        <div class="view-meta">${num(k.totalPending)} active shipments</div>
       </div>
     </div>
     ${renderSyncStrip(d.meta.source, state.lastProshipSync)}
     <div class="kpi-row">
-      <div class="kpi-card"><div class="kpi-label">Total Pending</div><div class="kpi-value amber">${num(k.totalPending)}</div><div class="kpi-sub">Across all statuses</div></div>
-      <div class="kpi-card"><div class="kpi-label">SLA Breached</div><div class="kpi-value red">${num(k.slaBreached)}</div><div class="kpi-sub">Action needed</div></div>
-      <div class="kpi-card"><div class="kpi-label">Normal Pipeline</div><div class="kpi-value green">${num(k.normalPipeline)}</div><div class="kpi-sub">Within SLA</div></div>
-      <div class="kpi-card"><div class="kpi-label">Breach Rate</div><div class="kpi-value ${k.slaBreached/k.totalPending>0.3?'red':'amber'}">${k.totalPending?((k.slaBreached/k.totalPending*100).toFixed(1)):0}%</div><div class="kpi-sub">of all pending</div></div>
+      <div class="kpi-card"><div class="kpi-label">TOTAL PENDING</div><div class="kpi-value">${num(k.totalPending)}</div><div class="kpi-sub">100% of all shipments</div></div>
+      <div class="kpi-card"><div class="kpi-label">SLA BREACHED</div><div class="kpi-value red">${num(k.slaBreached)}</div><div class="kpi-sub">Needs action with Proship</div><div class="kpi-bar"><div class="kpi-bar-fill kpi-bar-red" style="width:${breachPct}%"></div></div></div>
+      <div class="kpi-card"><div class="kpi-label">NORMAL PIPELINE</div><div class="kpi-value green">${num(k.normalPipeline)}</div><div class="kpi-sub">Within SLA</div><div class="kpi-bar"><div class="kpi-bar-fill kpi-bar-green" style="width:${pipelinePct}%"></div></div></div>
     </div>
+
+    <div class="info-row">
+      <div class="info-card">
+        <div class="info-card-title">SLA REFERENCE</div>
+        <ul class="info-list">
+          <li><span class="info-dot dot-red"></span><strong>Delivery / RTO / Reverse:</strong> Must be delivered or returned within 5 days of pickup date</li>
+          <li><span class="info-dot dot-amber"></span><strong>Pickup:</strong> Any shipment must be picked up within 24 hours of order placement</li>
+          <li><span class="info-dot dot-amber"></span><strong>Cancellations:</strong> Must be reviewed and actioned within 24 hours of order</li>
+        </ul>
+      </div>
+      <div class="info-card">
+        <div class="info-card-title">NORMAL PIPELINE</div>
+        <ul class="info-list">
+          ${inTransitRow ? `<li><span class="info-dot dot-green"></span><strong>${inTransitRow.withinSLA} In transit</strong> — within SLA</li>` : ''}
+          ${pickedUpRow ? `<li><span class="info-dot dot-green"></span><strong>${pickedUpRow.withinSLA} Picked up</strong> — within SLA</li>` : ''}
+        </ul>
+      </div>
+    </div>
+
     <div id="ai-insight-strip"></div>
     <div class="section-card">
       <div class="section-card-header">
-        <span class="section-card-title">Pending by Status</span>
+        <span class="section-card-title">All Pending — by Status</span>
         <div class="table-filters">
-          <select class="filter-select" id="pickup-sla-filter">
-            <option value="all" ${filter==='all'?'selected':''}>All statuses</option>
-            <option value="breached" ${filter==='breached'?'selected':''}>Breached only</option>
-            <option value="ok" ${filter==='ok'?'selected':''}>Within SLA only</option>
-          </select>
+          <div class="filter-chip-group">
+            <button class="filter-chip ${filter==='all'?'active':''}" data-slafilter="all">All</button>
+            <button class="filter-chip ${filter==='breached'?'active':''}" data-slafilter="breached">Breached only</button>
+          </div>
+          <span class="section-card-count">${sb.length} status groups</span>
         </div>
       </div>
       <div class="table-scroll" id="pickup-table-wrap"></div>
     </div>`;
 
   if (insight) renderInsightStrip(document.getElementById('ai-insight-strip'), insight.message, insight.timestamp);
-  document.getElementById('pickup-sla-filter').addEventListener('change', e => { state.tableFilter.slaStatus = e.target.value; renderPickupTable(d.statusBreakdown||[]); });
+  document.querySelectorAll('[data-slafilter]').forEach(btn => {
+    btn.addEventListener('click', () => { state.tableFilter.slaStatus = btn.dataset.slafilter; renderPickup(); });
+  });
   renderPickupTable(d.statusBreakdown||[]);
 }
 
@@ -634,70 +704,66 @@ function renderPickupTable(data) {
   wrap.querySelector('thead').addEventListener('click', handleSort);
 }
 
-// ── CANCELLATIONS ─────────────────────────────────────────────────────────────
+// ── ACTIONS (Cancellations) ───────────────────────────────────────────────────
 function renderCancellations() {
   const el = document.getElementById('content');
   const d = state.cancellations;
   if (!d) { el.innerHTML = renderEmpty('breach data', '⚠️'); return; }
   if (!state.tableSort.key) { state.tableSort.key = 'daysElapsed'; state.tableSort.dir = 'desc'; }
 
-  // Apply date range to shipments for KPIs
-  const bounds = getDateRangeBounds();
-  const filteredShipments = bounds
-    ? (d.shipments||[]).filter(r => {
-        const approxDate = new Date(Date.now() - r.daysElapsed * 86400000);
-        return approxDate >= bounds.from && approxDate <= bounds.to;
-      })
-    : (d.shipments||[]);
+  // Actions view intentionally does NOT apply the date-range filter —
+  // the filter only affects the Summary view.
+  const allShipments = d.shipments || [];
 
   const k = {
-    totalBreaches: filteredShipments.length,
-    deliveryBreaches: filteredShipments.filter(s=>s.breachType==='Delivery overdue').length,
-    rtoBreaches: filteredShipments.filter(s=>s.breachType==='RTO overdue').length,
-    pickupCancellationBreaches: filteredShipments.filter(s=>['Cancellation overdue','Pickup overdue'].includes(s.breachType)).length
+    totalBreaches: allShipments.length,
+    deliveryBreaches: allShipments.filter(s=>s.breachType==='Delivery overdue').length,
+    rtoBreaches: allShipments.filter(s=>s.breachType==='RTO overdue').length,
+    pickupCancellationBreaches: allShipments.filter(s=>['Cancellation overdue','Pickup overdue'].includes(s.breachType)).length
   };
   const insight = getAIInsight();
-  const cities = [...new Set((d.shipments||[]).map(s=>s.city).filter(Boolean))].sort();
+  const cities = [...new Set(allShipments.map(s=>s.city).filter(Boolean))].sort();
+  const active = state.tableFilter.breachType || '';
 
   el.innerHTML = `
     <div class="view-header">
       <div>
-        <div class="view-title">Cancellations &amp; Returns</div>
-        <div class="view-meta">Last updated ${fmtDate(d.meta.lastUpdated)}</div>
+        <div class="view-title">Actions</div>
+        <div class="view-meta">${num(k.totalBreaches)} active SLA breaches — sorted by severity</div>
       </div>
       <div class="view-actions">
-        <button class="btn btn-outline btn-sm" onclick="triggerSync()">↻ Refresh</button>
+        <button class="btn btn-outline btn-sm" onclick="triggerAnalyze()"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg> AI Analysis</button>
       </div>
     </div>
     ${renderSyncStrip(d.meta.source, state.lastProshipSync)}
     <div class="kpi-row">
-      <div class="kpi-card"><div class="kpi-label">Total SLA Breaches</div><div class="kpi-value red">${num(k.totalBreaches)}</div><div class="kpi-sub">Raise with Proship</div></div>
-      <div class="kpi-card"><div class="kpi-label">Delivery Breaches</div><div class="kpi-value red">${num(k.deliveryBreaches)}</div><div class="kpi-sub">&gt;5 days since pickup</div></div>
-      <div class="kpi-card"><div class="kpi-label">RTO Breaches</div><div class="kpi-value red">${num(k.rtoBreaches)}</div><div class="kpi-sub">&gt;5 days since pickup</div></div>
-      <div class="kpi-card"><div class="kpi-label">Pickup &amp; Cancel</div><div class="kpi-value amber">${num(k.pickupCancellationBreaches)}</div><div class="kpi-sub">Not actioned</div></div>
+      <div class="kpi-card"><div class="kpi-label">TOTAL SLA BREACHES</div><div class="kpi-value red">${num(k.totalBreaches)}</div><div class="kpi-sub">Raise with Proship today</div></div>
+      <div class="kpi-card"><div class="kpi-label">DELIVERY BREACHES</div><div class="kpi-value red">${num(k.deliveryBreaches)}</div><div class="kpi-sub">&gt;5 days since pickup</div></div>
+      <div class="kpi-card"><div class="kpi-label">RTO BREACHES</div><div class="kpi-value red">${num(k.rtoBreaches)}</div><div class="kpi-sub">&gt;5 days since pickup</div></div>
+      <div class="kpi-card"><div class="kpi-label">PICKUP &amp; CANCELLATION</div><div class="kpi-value amber">${num(k.pickupCancellationBreaches)}</div><div class="kpi-sub">Not yet picked up / actioned</div></div>
+    </div>
+
+    <div class="sla-legend">
+      <span><span class="info-dot dot-red"></span><strong>Delivery / RTO / Reverse:</strong> Must complete within <strong>5 days of pickup date</strong></span>
+      <span><span class="info-dot dot-amber"></span><strong>Pickup:</strong> Must be picked up within <strong>24 hrs of order</strong></span>
+      <span><span class="info-dot dot-amber"></span><strong>Cancellations:</strong> Must be actioned within <strong>24 hrs of order</strong></span>
+    </div>
+
+    <div class="filter-chip-row">
+      <button class="filter-chip ${active===''?'active':''}" data-type="">All <span class="chip-count">${k.totalBreaches}</span></button>
+      <button class="filter-chip ${active==='Delivery overdue'?'active':''}" data-type="Delivery overdue">Delivery overdue <span class="chip-count">${k.deliveryBreaches}</span></button>
+      <button class="filter-chip ${active==='RTO overdue'?'active':''}" data-type="RTO overdue">RTO overdue <span class="chip-count">${k.rtoBreaches}</span></button>
+      <button class="filter-chip ${active==='Pickup overdue'?'active':''}" data-type="Pickup overdue">Pickup overdue <span class="chip-count">${allShipments.filter(s=>s.breachType==='Pickup overdue').length}</span></button>
+      <button class="filter-chip ${active==='Cancellation overdue'?'active':''}" data-type="Cancellation overdue">Cancellation overdue <span class="chip-count">${allShipments.filter(s=>s.breachType==='Cancellation overdue').length}</span></button>
     </div>
     <div id="ai-insight-strip"></div>
     <div class="section-card">
       <div class="section-card-header">
-        <span class="section-card-title">All SLA Breaches</span>
+        <span class="section-card-title">Raise with Proship — ${num(k.totalBreaches)} shipments</span>
         <div class="table-filters">
-          <input type="text" class="filter-input" id="awb-search" placeholder="Search AWB…" style="width:120px" value="${esc(state.tableFilter.awb||'')}">
-          <select class="filter-select" id="breach-type-filter">
-            <option value="">All types</option>
-            <option value="Delivery overdue" ${state.tableFilter.breachType==='Delivery overdue'?'selected':''}>Delivery overdue</option>
-            <option value="RTO overdue" ${state.tableFilter.breachType==='RTO overdue'?'selected':''}>RTO overdue</option>
-            <option value="Cancellation overdue" ${state.tableFilter.breachType==='Cancellation overdue'?'selected':''}>Cancellation overdue</option>
-            <option value="Pickup overdue" ${state.tableFilter.breachType==='Pickup overdue'?'selected':''}>Pickup overdue</option>
-          </select>
-          <select class="filter-select" id="city-filter">
-            <option value="">All cities</option>
-            ${cities.map(c=>`<option value="${esc(c)}" ${state.tableFilter.city===c?'selected':''}>${esc(c)}</option>`).join('')}
-          </select>
-          <select class="filter-select" id="severity-filter">
-            <option value="">All severity</option>
-            <option value="red" ${state.tableFilter.severity==='red'?'selected':''}>Critical</option>
-            <option value="amber" ${state.tableFilter.severity==='amber'?'selected':''}>Warning</option>
-          </select>
+          <input type="text" class="filter-input" id="awb-search" placeholder="Search AWB, city, status…" value="${esc(state.tableFilter.awb||'')}">
+          <button class="btn btn-outline btn-sm" onclick="copyAWBs()"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg> Copy AWBs</button>
+          <button class="btn btn-outline btn-sm" onclick="exportCSV()"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Export CSV</button>
         </div>
       </div>
       <div class="table-scroll" id="cancellations-table-wrap"></div>
@@ -705,26 +771,45 @@ function renderCancellations() {
 
   if (insight) renderInsightStrip(document.getElementById('ai-insight-strip'), insight.message, insight.timestamp);
   document.getElementById('awb-search').addEventListener('input', e => { state.tableFilter.awb = e.target.value; renderCancellationsTable(d.shipments||[]); });
-  document.getElementById('breach-type-filter').addEventListener('change', e => { state.tableFilter.breachType = e.target.value; renderCancellationsTable(d.shipments||[]); });
-  document.getElementById('city-filter').addEventListener('change', e => { state.tableFilter.city = e.target.value; renderCancellationsTable(d.shipments||[]); });
-  document.getElementById('severity-filter').addEventListener('change', e => { state.tableFilter.severity = e.target.value; renderCancellationsTable(d.shipments||[]); });
+  document.querySelectorAll('.filter-chip-row [data-type]').forEach(btn => {
+    btn.addEventListener('click', () => { state.tableFilter.breachType = btn.dataset.type; renderCancellations(); });
+  });
   renderCancellationsTable(d.shipments||[]);
+}
+
+// Copy AWBs of currently filtered breaches to clipboard
+function copyAWBs() {
+  const rows = getFilteredBreachRows();
+  const text = rows.map(r => r.awb).join('\n');
+  navigator.clipboard.writeText(text).then(() => toast(`Copied ${rows.length} AWBs`, 'success')).catch(() => toast('Copy failed', 'error'));
+}
+
+// Export filtered breaches as CSV
+function exportCSV() {
+  const rows = getFilteredBreachRows();
+  const header = ['AWB','Status','Breach Type','City','Pickup Date','Days Elapsed','SLA Limit'];
+  const csv = [header.join(','), ...rows.map(r => [r.awb, r.status, r.breachType, r.city, r.pickupDate, r.daysElapsed, r.slaLimit].map(v => `"${String(v||'').replace(/"/g,'""')}"`).join(','))].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `sla-breaches-${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function getFilteredBreachRows() {
+  const data = state.cancellations?.shipments || [];
+  const f = state.tableFilter;
+  let rows = data;
+  if (f.awb) rows = rows.filter(r => (r.awb + ' ' + r.city + ' ' + r.status).toLowerCase().includes(f.awb.toLowerCase()));
+  if (f.breachType) rows = rows.filter(r => r.breachType === f.breachType);
+  return rows;
 }
 
 function renderCancellationsTable(data) {
   const f = state.tableFilter;
-  const bounds = getDateRangeBounds();
   let rows = data;
-  // Date range filter on daysElapsed (approximate from today)
-  if (bounds) {
-    const nowMs = Date.now();
-    rows = rows.filter(r => {
-      // Reconstruct approximate pickup date from daysElapsed
-      const approxDate = new Date(nowMs - r.daysElapsed * 86400000);
-      return approxDate >= bounds.from && approxDate <= bounds.to;
-    });
-  }
-  if (f.awb) rows = rows.filter(r=>r.awb.toLowerCase().includes(f.awb.toLowerCase()));
+  if (f.awb) rows = rows.filter(r=>(r.awb + ' ' + r.city + ' ' + r.status).toLowerCase().includes(f.awb.toLowerCase()));
   if (f.breachType) rows = rows.filter(r=>r.breachType.toLowerCase().includes(f.breachType.toLowerCase()));
   if (f.city) rows = rows.filter(r=>r.city===f.city);
   if (f.severity) rows = rows.filter(r=>r.severity===f.severity);
