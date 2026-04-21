@@ -483,13 +483,14 @@ function normaliseStatus(raw) {
   const map = {
     DELIVERED: 'delivered', RTO_DELIVERED: 'rto_delivered',
     RTO_INTRANSIT: 'rto', RTO_IN_TRANSIT: 'rto',
-    CANCELLED: 'cancelled', LOST: 'lost',
+    CANCELLED: 'cancelled', CANCELLED_ORDER: 'cancelled', LOST: 'lost',
     IN_TRANSIT: 'in_transit', INTRANSIT: 'in_transit',
     PICKED_UP: 'picked_up', OUT_FOR_DELIVERY: 'out_for_delivery',
     DELIVERY_FAILED: 'delivery_failed', FAILED_DELIVERY: 'delivery_failed',
     CANCELLED_PENDING: 'cancelled_pending', PICKUP_PENDING: 'pickup_pending',
     PICKUP_FAILED: 'pickup_failed', OUT_FOR_PICKUP: 'out_for_pickup',
     AWB_REGISTERED: 'registered', ORDER_PLACED: 'registered',
+    NA: 'unknown',
   };
   return map[s] || raw.toLowerCase();
 }
