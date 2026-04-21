@@ -1509,3 +1509,23 @@ table.data-table tfoot td {
   font-weight: 600;
   margin-top: 12px;
 }
+
+/* User Management */
+.users-section { margin-bottom: 20px; }
+.users-section-title {
+  font-size: 12px; font-weight: 600; color: var(--text-3);
+  text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;
+}
+.user-row {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  padding: 12px; border: 1px solid var(--border); border-radius: var(--r);
+  margin-bottom: 8px; background: var(--surface-2);
+}
+.user-info { flex: 1; min-width: 0; }
+.user-email { font-weight: 500; font-size: 13.5px; }
+.user-meta { font-size: 12px; color: var(--text-3); margin-top: 2px; }
+.user-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.user-actions select {
+  padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg); color: var(--text); font-family: inherit; font-size: 12px;
+}

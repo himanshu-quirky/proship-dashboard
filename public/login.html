@@ -22,6 +22,16 @@
       <p class="login-subtitle">Sign in to access your shipping analytics</p>
 
       <div id="auth-error" class="auth-error hidden"></div>
+      <div id="status-pending" class="status-msg pending hidden">
+        <strong>Awaiting admin approval</strong>
+        Your account has been created. An admin needs to approve you before you can access the dashboard. You'll get access as soon as they do.
+        <button class="signout-btn" id="signout-pending">Sign out</button>
+      </div>
+      <div id="status-rejected" class="status-msg rejected hidden">
+        <strong>Access denied</strong>
+        Your access request was declined. Contact an admin if you think this is a mistake.
+        <button class="signout-btn" id="signout-rejected">Sign out</button>
+      </div>
 
       <button class="google-btn" id="google-signin-btn">
         <svg width="20" height="20" viewBox="0 0 48 48">
@@ -51,7 +61,7 @@
           <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
           <polyline points="22 4 12 14.01 9 11.01"/>
         </svg>
-        <p>Check your email for a confirmation link to complete your sign up.</p>
+        <p>Check your email for a confirmation link. After confirming, an admin will need to approve your access before you can sign in.</p>
       </div>
     </div>
     <p class="login-footer">Proship MIS Dashboard &mdash; Secure access for authorized team members only</p>

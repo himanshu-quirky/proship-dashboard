@@ -34,12 +34,11 @@ let _authToken = null;
 async function initAuthGuard() {
   const config = await fetch('/api/auth/config').then(r => r.json()).catch(() => ({ authEnabled: false }));
   if (!config.authEnabled) {
-    // Auth not configured — everyone is treated as admin
-    state.currentUser = { email: null, role: 'admin' };
+    state.currentUser = { email: null, role: 'admin', status: 'active' };
+    document.body.classList.add('auth-ready');
     return;
   }
 
-  // Load Supabase JS
   await new Promise((resolve, reject) => {
     const s = document.createElement('script');
     s.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js';
@@ -50,26 +49,34 @@ async function initAuthGuard() {
 
   _supabaseClient = window.supabase.createClient(config.supabaseUrl, config.supabaseAnonKey);
   const { data: { session } } = await _supabaseClient.auth.getSession();
-  if (!session) { window.location.href = '/login'; return; }
+  if (!session) { window.location.replace('/login'); return; }
   _authToken = session.access_token;
 
-  // Keep token fresh
   _supabaseClient.auth.onAuthStateChange((_event, session) => {
-    if (!session) { window.location.href = '/login'; return; }
+    if (!session) { window.location.replace('/login'); return; }
     _authToken = session.access_token;
   });
 
-  // Fetch the user's role so the UI can hide admin-only controls
+  let me;
   try {
-    const me = await fetch('/api/auth/me', { headers: { Authorization: `Bearer ${_authToken}` } }).then(r => r.json());
-    state.currentUser = { email: me.email, role: me.role || 'team' };
-    console.log('[auth]', state.currentUser);
+    me = await fetch('/api/auth/me', { headers: { Authorization: `Bearer ${_authToken}` } }).then(r => r.json());
   } catch (e) {
-    state.currentUser = { email: null, role: 'team' };
+    me = { email: null, role: null, status: null };
   }
+
+  // Pending/rejected users get bounced to login with a message (handled there).
+  if (me.status === 'pending') { window.location.replace('/login?pending=1'); return; }
+  if (me.status === 'rejected') { window.location.replace('/login?rejected=1'); return; }
+
+  state.currentUser = { email: me.email, role: me.role || 'team', status: me.status || 'active' };
+  console.log('[auth]', state.currentUser);
+  document.body.classList.add('auth-ready');
 }
 
-function isAdmin() { return state.currentUser?.role === 'admin'; }
+function isAdmin() {
+  const r = state.currentUser?.role;
+  return r === 'admin' || r === 'super_admin' || r === 'head_admin';
+}
 
 // ── API ───────────────────────────────────────────────────────────────────────
 async function api(path, opts = {}) {
@@ -78,6 +85,11 @@ async function api(path, opts = {}) {
     if (_authToken) headers['Authorization'] = `Bearer ${_authToken}`;
     const res = await fetch(path, { ...opts, headers });
     if (res.status === 401) { window.location.href = '/login'; return null; }
+    if (res.status === 403) {
+      const body = await res.json().catch(() => ({}));
+      if (body.status === 'pending') { window.location.href = '/login?pending=1'; return null; }
+      if (body.status === 'rejected') { window.location.href = '/login?rejected=1'; return null; }
+    }
     return res.ok ? res.json() : null;
   } catch (e) { console.error('API', path, e.message); return null; }
 }
@@ -1005,7 +1017,16 @@ function renderSettings() {
         </div>
       </div>
 
+      ${isAdmin() ? `
+      <div class="settings-card" style="grid-column: 1 / -1">
+        <div class="settings-card-header"><span class="settings-card-title">User Management</span><button class="btn btn-outline btn-sm" onclick="loadUsersList()">Refresh</button></div>
+        <div class="settings-card-body">
+          <div id="users-list">Loading users…</div>
+        </div>
+      </div>` : ''}
     </div>`;
+
+  if (isAdmin()) loadUsersList();
 
   // Proship status indicator
   const ind = document.getElementById('proship-status-indicator');
@@ -1800,6 +1821,80 @@ function renderUserBadge() {
 async function signOut() {
   try { if (_supabaseClient) await _supabaseClient.auth.signOut(); } catch (e) {}
   window.location.href = '/login';
+}
+
+// ── User Management ──────────────────────────────────────────────────────────
+async function loadUsersList() {
+  const el = document.getElementById('users-list');
+  if (!el) return;
+  const data = await api('/api/auth/users');
+  if (!data || !data.users) { el.innerHTML = '<div class="form-hint">Could not load users.</div>'; return; }
+
+  const pending = data.users.filter(u => u.status === 'pending');
+  const active = data.users.filter(u => u.status === 'active');
+  const rejected = data.users.filter(u => u.status === 'rejected');
+  const me = state.currentUser?.email;
+
+  const row = (u) => {
+    const isMe = u.email === me;
+    return `
+      <div class="user-row">
+        <div class="user-info">
+          <div class="user-email">${esc(u.email)}${isMe ? ' <span style="color:var(--text-3);font-size:11px">(you)</span>' : ''}</div>
+          <div class="user-meta">Role: <strong>${u.role}</strong> · Status: <strong>${u.status}</strong>${u.approved_by ? ` · by ${esc(u.approved_by)}` : ''}</div>
+        </div>
+        <div class="user-actions">
+          ${u.status === 'pending' ? `
+            <select onchange="setUserRole('${u.user_id}', this.value)">
+              <option value="">Assign role…</option>
+              <option value="team">Team (read-only)</option>
+              <option value="admin">Admin</option>
+              ${state.currentUser?.role === 'head_admin' ? '<option value="super_admin">Super Admin</option>' : ''}
+            </select>
+            <button class="btn btn-outline btn-sm" onclick="setUserStatus('${u.user_id}', 'rejected')">Reject</button>
+          ` : ''}
+          ${u.status === 'active' && !isMe ? `
+            <select onchange="setUserRole('${u.user_id}', this.value)">
+              <option value="">Change role…</option>
+              <option value="team" ${u.role==='team'?'selected':''}>Team</option>
+              <option value="admin" ${u.role==='admin'?'selected':''}>Admin</option>
+              ${state.currentUser?.role === 'head_admin' ? `<option value="super_admin" ${u.role==='super_admin'?'selected':''}>Super Admin</option>` : ''}
+            </select>
+            <button class="btn btn-outline btn-sm" onclick="setUserStatus('${u.user_id}', 'rejected')">Revoke</button>
+          ` : ''}
+          ${u.status === 'rejected' && !isMe ? `
+            <button class="btn btn-outline btn-sm" onclick="setUserStatus('${u.user_id}', 'active')">Reinstate</button>
+          ` : ''}
+          ${!isMe && u.role !== 'head_admin' ? `<button class="btn btn-outline btn-sm" onclick="deleteUserAccount('${u.user_id}')">Delete</button>` : ''}
+        </div>
+      </div>`;
+  };
+
+  el.innerHTML = `
+    ${pending.length ? `<div class="users-section"><div class="users-section-title">Pending approval (${pending.length})</div>${pending.map(row).join('')}</div>` : ''}
+    <div class="users-section"><div class="users-section-title">Active (${active.length})</div>${active.map(row).join('') || '<div class="form-hint">None</div>'}</div>
+    ${rejected.length ? `<div class="users-section"><div class="users-section-title">Rejected (${rejected.length})</div>${rejected.map(row).join('')}</div>` : ''}
+  `;
+}
+
+async function setUserRole(userId, role) {
+  if (!role) return;
+  const r = await api(`/api/auth/users/${userId}/role`, { method: 'POST', body: JSON.stringify({ role }) });
+  if (r?.ok) loadUsersList();
+  else alert('Failed to update role');
+}
+
+async function setUserStatus(userId, status) {
+  const r = await api(`/api/auth/users/${userId}/role`, { method: 'POST', body: JSON.stringify({ status }) });
+  if (r?.ok) loadUsersList();
+  else alert('Failed to update status');
+}
+
+async function deleteUserAccount(userId) {
+  if (!confirm('Delete this user account permanently? This cannot be undone.')) return;
+  const res = await fetch(`/api/auth/users/${userId}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${_authToken}` } });
+  if (res.ok) loadUsersList();
+  else alert('Failed to delete');
 }
 
 document.addEventListener('DOMContentLoaded', init);
