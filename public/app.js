@@ -41,12 +41,17 @@ async function initAuthGuard() {
 
   await new Promise((resolve, reject) => {
     const s = document.createElement('script');
-    s.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js';
+    s.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
     s.onload = resolve;
     s.onerror = reject;
     document.head.appendChild(s);
   });
 
+  if (!window.supabase?.createClient) {
+    console.error('[auth] Supabase library failed to initialize');
+    document.body.classList.add('auth-ready');
+    return;
+  }
   _supabaseClient = window.supabase.createClient(config.supabaseUrl, config.supabaseAnonKey);
   const { data: { session } } = await _supabaseClient.auth.getSession();
   if (!session) { window.location.replace('/login'); return; }

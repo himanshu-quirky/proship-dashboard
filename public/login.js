@@ -4,6 +4,9 @@ let supabase = null;
 let isSignUp = false;
 
 async function initAuth() {
+  // Always intercept form submit so we never do a native GET on /login
+  document.getElementById('email-form')?.addEventListener('submit', (e) => e.preventDefault());
+
   const res = await fetch('/api/auth/config');
   const config = await res.json();
 
@@ -12,8 +15,15 @@ async function initAuth() {
     return;
   }
 
-  await loadScript('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js');
-  supabase = window.supabase.createClient(config.supabaseUrl, config.supabaseAnonKey);
+  try {
+    await loadScript('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2');
+    if (!window.supabase?.createClient) throw new Error('Supabase library failed to initialize');
+    supabase = window.supabase.createClient(config.supabaseUrl, config.supabaseAnonKey);
+  } catch (err) {
+    console.error('[auth] Supabase load failed:', err);
+    showError('Could not load authentication library. Please refresh the page.');
+    return;
+  }
 
   // Sign-out buttons for pending/rejected states
   document.getElementById('signout-pending')?.addEventListener('click', signOut);
@@ -23,7 +33,6 @@ async function initAuth() {
   const { data: { session } } = await supabase.auth.getSession();
 
   if (session) {
-    // Check status — if pending/rejected, stay here and show message
     const me = await fetch('/api/auth/me', { headers: { Authorization: `Bearer ${session.access_token}` } }).then(r => r.json()).catch(() => ({}));
     if (me.status === 'pending' || params.has('pending')) {
       showStatusMessage('pending');
@@ -85,7 +94,6 @@ function hideError() {
 }
 
 function setupListeners() {
-  // Google sign-in
   document.getElementById('google-signin-btn').addEventListener('click', async () => {
     hideError();
     const { error } = await supabase.auth.signInWithOAuth({
@@ -95,7 +103,6 @@ function setupListeners() {
     if (error) showError(error.message);
   });
 
-  // Email form
   document.getElementById('email-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     hideError();
@@ -119,7 +126,6 @@ function setupListeners() {
         if (error) {
           showError(error.message);
         } else {
-          // Show confirmation message
           document.getElementById('email-form').classList.add('hidden');
           document.getElementById('confirmation-msg').classList.remove('hidden');
           document.querySelector('.auth-toggle').classList.add('hidden');
@@ -140,7 +146,6 @@ function setupListeners() {
     btn.textContent = isSignUp ? 'Sign Up' : 'Sign In';
   });
 
-  // Toggle sign-in / sign-up
   document.getElementById('toggle-btn').addEventListener('click', () => {
     isSignUp = !isSignUp;
     hideError();
@@ -150,7 +155,6 @@ function setupListeners() {
   });
 }
 
-// Listen for auth state changes (handles OAuth redirect)
 window.addEventListener('hashchange', async () => {
   if (supabase) {
     const { data: { session } } = await supabase.auth.getSession();
