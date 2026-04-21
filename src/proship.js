@@ -351,28 +351,28 @@ function fetchOrderPage(token, offset, limit) {
 }
 
 // ── Fetch ALL recent orders (paginated) ───────────────────────────────────────
-// Previously this used a 4-page sample which produced misleading aggregates
-// (dashboard showed 80 orders when Proship actually has thousands). Now we
-// paginate forward using the same page size (20) that the API actually
-// supports, fetching 10 pages in parallel per round, until we've pulled every
-// order since the cutoff date (default: Dec 1 2025).
+// Paginate through /api/order/search starting at offset 0, in small parallel
+// batches (4 pages × 20 orders = 80 per round — same shape the previous
+// sampling code used, which is known to work). Keep going until we either
+// cross the Dec 1 2025 cutoff or hit 3 consecutive empty/failed batches.
 async function fetchSampleOrders(username, password) {
   const token = await getToken(username, password);
 
-  const PAGE_SIZE = 20;              // same page size as before (API constraint)
-  const BATCH = 10;                  // 10 parallel pages per round
-  const MAX_ROUNDS = 500;            // 500 × 10 × 20 = 100k orders safety cap
+  const PAGE_SIZE = 20;
+  const BATCH = 4;
+  const MAX_ROUNDS = 500;
   const CUTOFF = new Date('2025-12-01T00:00:00Z');
 
-  console.log(`[Proship] Paginating orders since ${CUTOFF.toISOString().slice(0,10)} (page size ${PAGE_SIZE}, ${BATCH} parallel)`);
+  console.log(`[Proship] Paginating since ${CUTOFF.toISOString().slice(0,10)} (page ${PAGE_SIZE}, ${BATCH} parallel)`);
 
   const seen = new Set();
   const orders = [];
   let offset = 0;
   let rounds = 0;
-  let stop = false;
+  let consecutiveEmpty = 0;
+  let cutoffHit = false;
 
-  while (!stop && rounds < MAX_ROUNDS) {
+  while (rounds < MAX_ROUNDS && !cutoffHit && consecutiveEmpty < 3) {
     const offs = Array.from({ length: BATCH }, (_, i) => offset + i * PAGE_SIZE);
     const pages = await Promise.all(
       offs.map(o => fetchOrderPage(token, o, PAGE_SIZE).catch(e => {
@@ -381,32 +381,30 @@ async function fetchSampleOrders(username, password) {
     );
 
     let batchAdded = 0;
-    let emptyPages = 0;
+    let batchTotal = 0;
     for (const page of pages) {
-      if (!page.length) { emptyPages++; continue; }
+      batchTotal += page.length;
       for (const o of page) {
         const id = o.orderId || o.id;
         if (!id || seen.has(id)) continue;
         seen.add(id);
         const dRaw = o.createdDate || o.orderDate;
         const d = dRaw ? new Date(dRaw) : null;
-        // Past cutoff? Mark to stop but still include THIS order's data
-        // (orders come newest-first so older ones appear later in the stream)
-        if (d && !isNaN(d) && d < CUTOFF) { stop = true; continue; }
+        if (d && !isNaN(d) && d < CUTOFF) { cutoffHit = true; continue; }
         orders.push(o);
         batchAdded++;
       }
     }
 
-    // Stop when: all pages came back empty, OR we passed the cutoff
-    if (emptyPages === BATCH) { stop = true; console.log('[Proship] all pages empty, stopping'); }
+    if (batchTotal === 0) consecutiveEmpty++;
+    else consecutiveEmpty = 0;
 
     offset += PAGE_SIZE * BATCH;
     rounds++;
-    console.log(`[Proship] round ${rounds}: +${batchAdded} new (${emptyPages} empty pages), ${orders.length} total, offset now ${offset}`);
+    console.log(`[Proship] round ${rounds}: got ${batchTotal} orders, ${batchAdded} new, ${orders.length} total (cutoffHit=${cutoffHit})`);
   }
 
-  console.log(`[Proship] Fetched ${orders.length} orders since ${CUTOFF.toISOString().slice(0,10)}`);
+  console.log(`[Proship] Done — ${orders.length} orders since ${CUTOFF.toISOString().slice(0,10)}`);
   return orders;
 }
 
