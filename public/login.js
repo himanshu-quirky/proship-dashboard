@@ -33,7 +33,6 @@ async function initAuth() {
   const { data: { session } } = await supabase.auth.getSession();
 
   if (session) {
-    // Check status — if pending/rejected, stay here and show message
     const me = await fetch('/api/auth/me', { headers: { Authorization: `Bearer ${session.access_token}` } }).then(r => r.json()).catch(() => ({}));
     if (me.status === 'pending' || params.has('pending')) {
       showStatusMessage('pending');
@@ -95,7 +94,6 @@ function hideError() {
 }
 
 function setupListeners() {
-  // Google sign-in
   document.getElementById('google-signin-btn').addEventListener('click', async () => {
     hideError();
     const { error } = await supabase.auth.signInWithOAuth({
@@ -105,7 +103,6 @@ function setupListeners() {
     if (error) showError(error.message);
   });
 
-  // Email form
   document.getElementById('email-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     hideError();
@@ -129,7 +126,6 @@ function setupListeners() {
         if (error) {
           showError(error.message);
         } else {
-          // Show confirmation message
           document.getElementById('email-form').classList.add('hidden');
           document.getElementById('confirmation-msg').classList.remove('hidden');
           document.querySelector('.auth-toggle').classList.add('hidden');
@@ -150,7 +146,6 @@ function setupListeners() {
     btn.textContent = isSignUp ? 'Sign Up' : 'Sign In';
   });
 
-  // Toggle sign-in / sign-up
   document.getElementById('toggle-btn').addEventListener('click', () => {
     isSignUp = !isSignUp;
     hideError();
@@ -160,7 +155,6 @@ function setupListeners() {
   });
 }
 
-// Listen for auth state changes (handles OAuth redirect)
 window.addEventListener('hashchange', async () => {
   if (supabase) {
     const { data: { session } } = await supabase.auth.getSession();
