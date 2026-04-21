@@ -1,6 +1,7 @@
 'use strict';
 const slack = require('./slack');
 const wa = require('./whatsapp');
+const email = require('./email');
 
 const notifiedBreaches = new Set();
 let thresholdTriggered = false;
@@ -66,6 +67,11 @@ async function checkAndNotify(store, sendSSE) {
       await slack.send(settings.slackWebhook, text, blocks);
     }
 
+    if (email.isConfigured() && Array.isArray(settings.emailRecipients) && settings.emailRecipients.length) {
+      const { subject, html, text: textBody } = email.breachEmail(alertPayload);
+      await email.send({ to: settings.emailRecipients, subject, html, text: textBody });
+    }
+
     const notif = addNotification(store,
       `${newAWBs.length} new SLA breach${newAWBs.length !== 1 ? 'es' : ''} detected: ${newAWBs.slice(0, 3).join(', ')}${newAWBs.length > 3 ? ` +${newAWBs.length - 3} more` : ''}`,
       'breach'
@@ -105,6 +111,11 @@ async function sendDailyDigest(store) {
   if (settings.slackWebhook) {
     const blocks = slack.buildDigestBlocks({ store, dashboardUrl });
     await slack.send(settings.slackWebhook, '☀️ Prozoship Daily Digest', blocks);
+  }
+
+  if (email.isConfigured() && Array.isArray(settings.emailRecipients) && settings.emailRecipients.length) {
+    const { subject, html, text } = email.digestEmail({ store, dashboardUrl });
+    await email.send({ to: settings.emailRecipients, subject, html, text });
   }
 
   const totalBreaches = store.cancellations?.kpis?.totalBreaches || 0;

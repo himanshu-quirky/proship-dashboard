@@ -1180,117 +1180,299 @@ async function toggleRecipient(chatId, chatName, isGroup, checked) {
 async function renderBroadcast() {
   const el = document.getElementById('content');
   const s = state.settings || {};
-  const status = await api('/api/slack/status') || { configured: false };
-  const webhook = s.slackWebhook || '';
+  const [slackStatus, emailStatus, waStatus] = await Promise.all([
+    api('/api/slack/status').catch(() => ({ configured: false })),
+    api('/api/email/status').catch(() => ({ configured: false })),
+    api('/api/whatsapp/status').catch(() => ({ connected: false }))
+  ]);
+  const tab = state.notifTab || 'slack';
   const mode = s.notificationMode || 'both';
+
+  const tabs = [
+    { id: 'slack',    label: 'Slack',    badge: slackStatus?.configured ? 'ok' : 'off' },
+    { id: 'email',    label: 'Email',    badge: emailStatus?.configured ? 'ok' : 'off' },
+    { id: 'whatsapp', label: 'WhatsApp', badge: waStatus?.connected ? 'ok' : 'off' }
+  ];
 
   el.innerHTML = `
     <div class="view-header">
       <div>
-        <div class="view-title">Slack Alerts</div>
-        <div class="view-meta">${status.configured ? 'Slack is connected — alerts are being sent to your channel' : 'Send breach alerts, daily digests, and AI insights to a Slack channel'}</div>
+        <div class="view-title">Notifications</div>
+        <div class="view-meta">Send SLA breach alerts and the daily digest to your team via Slack, Email, or WhatsApp</div>
       </div>
     </div>
 
-    <div class="slack-grid">
-      <div class="slack-card">
-        <div class="slack-card-head">
-          <span class="slack-card-title">① Connect Slack</span>
-          ${status.configured ? '<span class="badge badge-green">Connected</span>' : '<span class="badge badge-amber">Not connected</span>'}
-        </div>
-        <p class="slack-card-desc">
-          Use a Slack <strong>Incoming Webhook</strong> (simpler than a bot — no OAuth needed):
-        </p>
-        <ol class="slack-steps">
-          <li>Go to <a href="https://api.slack.com/apps" target="_blank" rel="noopener">api.slack.com/apps</a> → <strong>Create New App → From scratch</strong></li>
-          <li>Name it <em>Prozoship Alerts</em>, pick your workspace</li>
-          <li>Open <strong>Incoming Webhooks</strong> → toggle <em>Activate</em> → <strong>Add New Webhook to Workspace</strong></li>
-          <li>Choose the channel (e.g. <code>#ops-proship</code>) → <strong>Allow</strong></li>
-          <li>Copy the webhook URL (<code>https://hooks.slack.com/services/…</code>) and paste below</li>
-        </ol>
+    <div class="notif-tabs">
+      ${tabs.map(t => `<button class="notif-tab ${tab===t.id?'active':''}" data-tab="${t.id}">
+        ${t.label}
+        <span class="notif-tab-dot ${t.badge==='ok'?'dot-green':'dot-muted'}"></span>
+      </button>`).join('')}
+    </div>
 
-        <div class="form-row">
-          <label class="form-label">Slack Incoming Webhook URL</label>
-          <input class="form-input" id="slack-webhook-input" type="password" placeholder="https://hooks.slack.com/services/T00000/B00000/..." value="${esc(webhook)}" autocomplete="off">
-          ${status.redacted ? `<div class="form-hint">Currently saved: <code>${esc(status.redacted)}</code></div>` : ''}
-        </div>
-        <div class="form-actions">
-          <button class="btn btn-primary btn-sm" onclick="saveSlackWebhook()">Save webhook</button>
-          <button class="btn btn-outline btn-sm" onclick="testSlack()" ${webhook ? '' : 'disabled'}>Send test message</button>
-        </div>
-      </div>
-
-      <div class="slack-card">
-        <div class="slack-card-head">
-          <span class="slack-card-title">② Choose when to notify</span>
-        </div>
-        <div class="slack-mode-options">
-          <label class="slack-mode-option ${mode==='realtime'?'selected':''}">
-            <input type="radio" name="slack-mode" value="realtime" ${mode==='realtime'?'checked':''}>
-            <div>
-              <div class="slack-mode-title">Real-time only <span class="mode-meta">Instant</span></div>
-              <div class="slack-mode-desc">Alert immediately when new SLA breaches appear</div>
-            </div>
-          </label>
-          <label class="slack-mode-option ${mode==='daily'?'selected':''}">
-            <input type="radio" name="slack-mode" value="daily" ${mode==='daily'?'checked':''}>
-            <div>
-              <div class="slack-mode-title">Daily digest only <span class="mode-meta">9 AM IST</span></div>
-              <div class="slack-mode-desc">One morning summary with KPIs + top overdue shipments</div>
-            </div>
-          </label>
-          <label class="slack-mode-option ${mode==='both'?'selected':''}">
-            <input type="radio" name="slack-mode" value="both" ${mode==='both'?'checked':''}>
-            <div>
-              <div class="slack-mode-title">Both <span class="mode-meta">Recommended</span></div>
-              <div class="slack-mode-desc">Real-time breach alerts plus the daily morning digest</div>
-            </div>
-          </label>
-        </div>
-        <div class="form-actions">
-          <button class="btn btn-primary btn-sm" onclick="saveSlackMode()">Save schedule</button>
-          <button class="btn btn-outline btn-sm" onclick="sendDigestNow()" ${webhook ? '' : 'disabled'}>Send digest now</button>
-        </div>
-      </div>
-
-      <div class="slack-card slack-card-wide">
-        <div class="slack-card-head"><span class="slack-card-title">What Slack messages look like</span></div>
-        <div class="slack-preview">
-          <div class="slack-preview-msg">
-            <div class="slack-preview-head">🚨 <strong>New SLA Breaches</strong></div>
-            <div class="slack-preview-body">
-              <p><strong>3 new breaches detected</strong> — 47 total active</p>
-              <ul>
-                <li><code>31049529107546</code> — Cancellation overdue · Tuticorin · 62.5d</li>
-                <li><code>01007244458</code> — RTO overdue · Bangalore · 60.5d</li>
-                <li><code>367324668898</code> — RTO overdue · Bangalore · 39.5d</li>
-              </ul>
-              <div class="slack-preview-btn">Raise with Proship →</div>
-            </div>
-          </div>
-          <div class="slack-preview-msg">
-            <div class="slack-preview-head">☀️ <strong>Prozoship Daily Digest</strong></div>
-            <div class="slack-preview-body">
-              <div class="slack-preview-grid">
-                <div><small>📦 Total Shipments</small><br><strong>16,616</strong></div>
-                <div><small>🟢 Delivery Rate</small><br><strong>96.8%</strong></div>
-                <div><small>⏱ Avg TAT</small><br><strong>3.4 days</strong></div>
-                <div><small>🟡 On-Time vs EDD</small><br><strong>78.2%</strong></div>
-              </div>
-              <p style="margin-top:8px"><strong>⚠️ 91 Active SLA Breaches</strong> — raise with Proship today</p>
-              <div class="slack-preview-btn">Open Dashboard →</div>
-            </div>
-          </div>
-        </div>
-      </div>
+    <div id="notif-panel-body">
+      ${tab === 'slack' ? renderSlackPanel({ slackStatus, mode, webhook: s.slackWebhook || '' })
+        : tab === 'email' ? renderEmailPanel({ emailStatus, mode })
+        : renderWhatsAppPanel({ waStatus, recipients: s.waRecipients || [] })}
     </div>`;
 
-  document.querySelectorAll('input[name="slack-mode"]').forEach(r => {
+  document.querySelectorAll('.notif-tab').forEach(btn => {
+    btn.addEventListener('click', () => { state.notifTab = btn.dataset.tab; renderBroadcast(); });
+  });
+  document.querySelectorAll('input[name="notif-mode"]').forEach(r => {
     r.addEventListener('change', () => {
       document.querySelectorAll('.slack-mode-option').forEach(o => o.classList.remove('selected'));
       r.closest('.slack-mode-option').classList.add('selected');
     });
   });
+  if (tab === 'whatsapp' && waStatus?.connected) loadWAChats();
+}
+
+function renderSlackPanel({ slackStatus, mode, webhook }) {
+  return `
+    <div class="slack-grid">
+      <div class="slack-card">
+        <div class="slack-card-head">
+          <span class="slack-card-title">① Connect Slack</span>
+          ${slackStatus?.configured ? '<span class="badge badge-green">Connected</span>' : '<span class="badge badge-amber">Not connected</span>'}
+        </div>
+        <p class="slack-card-desc">Paste an <strong>Incoming Webhook</strong> URL from <a href="https://api.slack.com/apps" target="_blank" rel="noopener">api.slack.com/apps</a> — no bot/OAuth needed.</p>
+        <div class="form-row">
+          <label class="form-label">Slack Incoming Webhook URL</label>
+          <input class="form-input" id="slack-webhook-input" type="password" placeholder="https://hooks.slack.com/services/…" value="${esc(webhook)}" autocomplete="off">
+          ${slackStatus?.redacted ? `<div class="form-hint">Saved: <code>${esc(slackStatus.redacted)}</code></div>` : ''}
+        </div>
+        <div class="form-actions">
+          <button class="btn btn-primary btn-sm" onclick="saveSlackWebhook()">Save</button>
+          <button class="btn btn-outline btn-sm" onclick="testSlack()" ${webhook ? '' : 'disabled'}>Test</button>
+          <button class="btn btn-outline btn-sm" onclick="sendSlackDigestNow()" ${webhook ? '' : 'disabled'}>Send digest now</button>
+        </div>
+      </div>
+      ${renderSchedulePanel(mode)}
+    </div>`;
+}
+
+function renderEmailPanel({ emailStatus, mode }) {
+  const recipients = state.settings?.emailRecipients || emailStatus?.recipients || [];
+  return `
+    <div class="slack-grid">
+      <div class="slack-card">
+        <div class="slack-card-head">
+          <span class="slack-card-title">① Recipients</span>
+          ${emailStatus?.configured ? '<span class="badge badge-green">SMTP connected</span>' : '<span class="badge badge-amber">SMTP not configured</span>'}
+        </div>
+        ${!emailStatus?.configured ? `
+          <div class="info-strip">
+            <strong>Server-side setup required.</strong> Add these env vars on Render:
+            <ul style="margin:6px 0 0 18px;font-size:12px">
+              <li><code>SMTP_HOST</code> (e.g. <code>smtp.gmail.com</code>, <code>smtp.resend.com</code>)</li>
+              <li><code>SMTP_PORT</code> (<code>587</code> for STARTTLS, <code>465</code> for SSL)</li>
+              <li><code>SMTP_USER</code> and <code>SMTP_PASS</code> (for Gmail: a 16-char <a href="https://myaccount.google.com/apppasswords" target="_blank">App Password</a>; for Resend: use <code>resend</code> / API key)</li>
+              <li><code>SMTP_FROM</code> (optional — defaults to <code>SMTP_USER</code>)</li>
+            </ul>
+          </div>
+        ` : ''}
+        <div class="form-row">
+          <label class="form-label">Send alerts to these addresses (one per line)</label>
+          <textarea class="form-input" id="email-recipients" rows="5" placeholder="ops@company.com&#10;team@company.com">${recipients.join('\n')}</textarea>
+          <div class="form-hint">Emails will be sent to all recipients on the To: line. Separate with newlines.</div>
+        </div>
+        <div class="form-actions">
+          <button class="btn btn-primary btn-sm" onclick="saveEmailRecipients()">Save recipients</button>
+          <button class="btn btn-outline btn-sm" onclick="testEmail()" ${emailStatus?.configured ? '' : 'disabled'}>Send test email</button>
+          <button class="btn btn-outline btn-sm" onclick="sendEmailDigestNow()" ${emailStatus?.configured && recipients.length ? '' : 'disabled'}>Send digest now</button>
+        </div>
+      </div>
+      ${renderSchedulePanel(mode)}
+    </div>`;
+}
+
+function renderWhatsAppPanel({ waStatus, recipients }) {
+  const connected = waStatus?.connected;
+  const initializing = waStatus?.initializing;
+  const qr = waStatus?.qr;
+  return `
+    <div class="slack-grid">
+      <div class="slack-card">
+        <div class="slack-card-head">
+          <span class="slack-card-title">① Connect WhatsApp</span>
+          ${connected ? '<span class="badge badge-green">Connected</span>'
+            : initializing ? '<span class="badge badge-amber">Scanning QR…</span>'
+            : '<span class="badge badge-amber">Not connected</span>'}
+        </div>
+        <p class="slack-card-desc">
+          Links your personal WhatsApp via a one-time QR scan (uses Baileys — WhatsApp Web protocol).
+          Once connected the server posts to chats & groups <strong>even when your laptop is closed</strong>
+          — the session runs on Render, not your device.
+        </p>
+        ${!connected && !initializing ? `
+          <div class="form-actions">
+            <button class="btn btn-primary btn-sm" onclick="initWhatsApp()">Start connection (show QR)</button>
+          </div>
+        ` : ''}
+        ${initializing && qr ? `
+          <div class="wa-qr-box">
+            <img src="${qr}" alt="WhatsApp QR code" style="width:220px;height:220px;display:block;margin:10px auto;border-radius:8px" />
+            <p style="text-align:center;font-size:12px;color:var(--text-2)">
+              WhatsApp → Settings → <strong>Linked Devices</strong> → <strong>Link a Device</strong> → scan this QR
+            </p>
+          </div>
+        ` : ''}
+        ${connected ? `
+          <p style="color:var(--green-text);font-size:12.5px;margin-bottom:10px">
+            ✅ Session active on the Render server. Notifications will be sent without needing your laptop online.
+          </p>
+          <div class="form-actions">
+            <button class="btn btn-outline btn-sm" onclick="refreshBroadcastGroups()">Refresh chats &amp; groups</button>
+            <button class="btn btn-outline btn-sm" onclick="disconnectWhatsApp()" style="color:var(--red)">Disconnect</button>
+          </div>
+        ` : ''}
+      </div>
+
+      ${connected ? `
+        <div class="slack-card">
+          <div class="slack-card-head">
+            <span class="slack-card-title">② Select chats &amp; groups to notify</span>
+            <span id="bc-selected-count" style="font-size:11.5px;color:var(--text-2)">${recipients.length} selected</span>
+          </div>
+          <div class="broadcast-search-wrap">
+            <input class="form-input" id="bc-search" placeholder="Search chats…" oninput="filterBroadcastGroups(this.value)">
+          </div>
+          <div id="broadcast-group-list" class="broadcast-group-list" style="max-height:340px;overflow-y:auto">
+            <div class="broadcast-empty-groups">Loading chats…</div>
+          </div>
+          <div class="form-actions">
+            <button class="btn btn-primary btn-sm" onclick="saveWARecipients()">Save selection</button>
+            <button class="btn btn-outline btn-sm" onclick="sendWATestMessage()">Send test message</button>
+          </div>
+        </div>
+      ` : `
+        <div class="slack-card">
+          <div class="slack-card-head">
+            <span class="slack-card-title">Privacy &amp; token usage</span>
+          </div>
+          <p style="font-size:12.5px;color:var(--text-2);line-height:1.55">
+            The server only <strong>sends outgoing messages</strong> — it does not read existing
+            conversations, reply to messages, or fetch message history.
+          </p>
+          <p style="font-size:12.5px;color:var(--text-2);line-height:1.55">
+            <strong>⚠️ Note on reliability:</strong> Baileys is an unofficial WhatsApp Web client.
+            Meta may rarely disconnect the session (requiring a fresh QR scan). For business-critical
+            alerts, keep Email or Slack enabled as a backup.
+          </p>
+        </div>
+      `}
+    </div>`;
+}
+
+function renderSchedulePanel(mode) {
+  return `
+    <div class="slack-card">
+      <div class="slack-card-head">
+        <span class="slack-card-title">② When to notify</span>
+        <span class="form-hint" style="margin:0">Applies to all channels</span>
+      </div>
+      <div class="slack-mode-options">
+        <label class="slack-mode-option ${mode==='realtime'?'selected':''}">
+          <input type="radio" name="notif-mode" value="realtime" ${mode==='realtime'?'checked':''}>
+          <div>
+            <div class="slack-mode-title">Real-time only <span class="mode-meta">Instant</span></div>
+            <div class="slack-mode-desc">Alert immediately when new SLA breaches appear</div>
+          </div>
+        </label>
+        <label class="slack-mode-option ${mode==='daily'?'selected':''}">
+          <input type="radio" name="notif-mode" value="daily" ${mode==='daily'?'checked':''}>
+          <div>
+            <div class="slack-mode-title">Daily digest only <span class="mode-meta">9 AM IST</span></div>
+            <div class="slack-mode-desc">One morning summary with KPIs + top overdue shipments</div>
+          </div>
+        </label>
+        <label class="slack-mode-option ${mode==='both'?'selected':''}">
+          <input type="radio" name="notif-mode" value="both" ${mode==='both'?'checked':''}>
+          <div>
+            <div class="slack-mode-title">Both <span class="mode-meta">Recommended</span></div>
+            <div class="slack-mode-desc">Real-time breach alerts plus the daily morning digest</div>
+          </div>
+        </label>
+      </div>
+      <div class="form-actions">
+        <button class="btn btn-primary btn-sm" onclick="saveSlackMode()">Save schedule</button>
+      </div>
+    </div>`;
+}
+
+// Email handlers
+async function saveEmailRecipients() {
+  const raw = document.getElementById('email-recipients').value;
+  const list = raw.split(/[\n,;]+/).map(s => s.trim()).filter(s => /@/.test(s));
+  const res = await api('/api/settings', { method: 'POST', body: JSON.stringify({ emailRecipients: list }) });
+  if (res) {
+    state.settings.emailRecipients = list;
+    toast(`Saved ${list.length} recipient${list.length !== 1 ? 's' : ''}`, 'success');
+    renderBroadcast();
+  } else toast('Failed to save', 'error');
+}
+
+async function testEmail() {
+  const raw = document.getElementById('email-recipients').value;
+  const list = raw.split(/[\n,;]+/).map(s => s.trim()).filter(s => /@/.test(s));
+  if (!list.length) return toast('Add at least one email address first', 'error');
+  toast('Sending test email…', 'info');
+  const res = await api('/api/email/test', { method: 'POST', body: JSON.stringify({ to: list }) });
+  if (res?.ok) toast('✓ Test email sent — check inboxes', 'success');
+  else toast(`Email failed: ${res?.error || 'unknown error'}`, 'error');
+}
+
+async function sendEmailDigestNow() {
+  toast('Sending digest…', 'info');
+  const res = await api('/api/email/digest', { method: 'POST' });
+  if (res?.ok) toast(`✓ Digest sent to ${(res.accepted||[]).length} recipients`, 'success');
+  else toast(`Failed: ${res?.error || 'unknown error'}`, 'error');
+}
+
+// WhatsApp handlers
+async function initWhatsApp() {
+  toast('Starting WhatsApp connection…', 'info');
+  await api('/api/whatsapp/init', { method: 'POST' });
+  // Poll for QR / connected state
+  const pollId = setInterval(async () => {
+    const s = await api('/api/whatsapp/status');
+    if (s?.connected) { clearInterval(pollId); state.waConnected = true; renderBroadcast(); toast('✓ WhatsApp connected', 'success'); }
+    else if (s?.qr && !document.querySelector('.wa-qr-box')) { renderBroadcast(); }
+  }, 2000);
+}
+
+async function disconnectWhatsApp() {
+  if (!confirm('Disconnect WhatsApp? You will need to re-scan the QR to reconnect.')) return;
+  await api('/api/whatsapp/disconnect', { method: 'POST' });
+  state.waConnected = false;
+  state.broadcastSelected = [];
+  renderBroadcast();
+}
+
+async function saveWARecipients() {
+  const ids = state.broadcastSelected || [];
+  const chats = state.waChats || [];
+  const picked = chats.filter(c => ids.includes(c.id)).map(c => ({ id: c.id, name: c.name }));
+  const res = await api('/api/settings', { method: 'POST', body: JSON.stringify({ waRecipients: picked }) });
+  if (res) { state.settings.waRecipients = picked; toast(`Saved ${picked.length} recipient${picked.length !== 1 ? 's' : ''}`, 'success'); }
+  else toast('Failed to save', 'error');
+}
+
+async function sendWATestMessage() {
+  const ids = state.broadcastSelected || [];
+  if (!ids.length) return toast('Select at least one chat/group first', 'error');
+  toast('Sending test…', 'info');
+  const res = await api('/api/whatsapp/send', { method: 'POST', body: JSON.stringify({ chatIds: ids, message: '✅ Prozoship alerts are now active in this chat.' }) });
+  const okCount = (res?.results || []).filter(r => r.ok).length;
+  toast(`✓ Sent to ${okCount}/${ids.length}`, okCount > 0 ? 'success' : 'error');
+}
+
+async function sendSlackDigestNow() {
+  if (!state.settings.slackWebhook) return toast('Configure Slack webhook first', 'error');
+  toast('Sending digest…', 'info');
+  const res = await api('/api/slack/digest', { method: 'POST' });
+  if (res?.ok) toast('✓ Digest posted to Slack', 'success');
+  else toast(`Failed: ${res?.error || 'unknown error'}`, 'error');
 }
 
 async function saveSlackWebhook() {
@@ -1328,13 +1510,6 @@ async function testSlack() {
   else toast(`Slack test failed: ${res?.error || 'unknown error'}`, 'error');
 }
 
-async function sendDigestNow() {
-  if (!state.settings.slackWebhook) return toast('Configure Slack webhook first', 'error');
-  toast('Sending digest…', 'info');
-  const res = await api('/api/slack/digest', { method: 'POST' });
-  if (res?.ok) toast('✓ Digest posted to Slack', 'success');
-  else toast(`Failed: ${res?.error || 'unknown error'}`, 'error');
-}
 
 function renderBroadcastGroupListInner(groups, filter) {
   const q = filter.toLowerCase();

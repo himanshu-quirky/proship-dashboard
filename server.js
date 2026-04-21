@@ -68,6 +68,7 @@ let store = {
     breachThreshold: 10,
     notificationMode: 'both',
     slackWebhook: '',
+    emailRecipients: [],
     waRecipients: [],
     waConnected: false,
     proshipUsername: process.env.PROSHIP_USERNAME || '',
@@ -360,7 +361,7 @@ app.post('/api/notifications/:id/read', (req, res) => {
 app.get('/api/settings', (req, res) => res.json(store.settings));
 
 app.post('/api/settings', (req, res) => {
-  const allowed = ['breachThreshold', 'notificationMode', 'slackWebhook', 'waRecipients', 'proshipUsername', 'proshipPassword', 'pollIntervalMinutes'];
+  const allowed = ['breachThreshold', 'notificationMode', 'slackWebhook', 'waRecipients', 'emailRecipients', 'proshipUsername', 'proshipPassword', 'pollIntervalMinutes'];
   const prevSlack = store.settings.slackWebhook;
   allowed.forEach(k => { if (req.body[k] !== undefined) store.settings[k] = req.body[k]; });
   if (req.body.slackWebhook !== undefined && req.body.slackWebhook !== prevSlack) {
@@ -441,7 +442,36 @@ app.post('/api/whatsapp/disconnect', async (req, res) => {
 
 // ── Slack ─────────────────────────────────────────────────────────────────────
 const Slack = require('./src/slack');
+const Email = require('./src/email');
 const dashUrl = () => process.env.DASHBOARD_URL || `http://localhost:${PORT}`;
+
+// ── Email ─────────────────────────────────────────────────────────────────────
+app.get('/api/email/status', (req, res) => {
+  res.json({
+    configured: Email.isConfigured(),
+    recipients: store.settings.emailRecipients || []
+  });
+});
+
+app.post('/api/email/test', async (req, res) => {
+  if (!Email.isConfigured()) return res.status(400).json({ ok: false, error: 'SMTP env vars not configured on the server' });
+  const to = Array.isArray(req.body?.to) && req.body.to.length
+    ? req.body.to
+    : store.settings.emailRecipients || [];
+  if (!to.length) return res.status(400).json({ ok: false, error: 'No recipients — add at least one email address' });
+  const { subject, html, text } = Email.testEmail({ dashboardUrl: dashUrl() });
+  const result = await Email.send({ to, subject, html, text });
+  res.json(result);
+});
+
+app.post('/api/email/digest', async (req, res) => {
+  if (!Email.isConfigured()) return res.status(400).json({ ok: false, error: 'SMTP env vars not configured on the server' });
+  const to = store.settings.emailRecipients || [];
+  if (!to.length) return res.status(400).json({ ok: false, error: 'No recipients configured' });
+  const { subject, html, text } = Email.digestEmail({ store, dashboardUrl: dashUrl() });
+  const result = await Email.send({ to, subject, html, text });
+  res.json(result);
+});
 
 // Test Slack webhook — sends a friendly confirmation message
 app.post('/api/slack/test', async (req, res) => {
