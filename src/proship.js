@@ -429,17 +429,42 @@ function buildDeliveryReport(orders) {
   const onTimeDelivery = tats.length ? parseFloat((tats.filter(t => t<=5).length/tats.length*100).toFixed(1)) : 0;
 
   const monthMap = {};
+  const dayMap = {};
   orders.forEach(o => {
     const d = new Date(o.createdDate || o.orderDate);
     if (isNaN(d)) return;
-    const k = d.toLocaleString('en',{month:'short',year:'2-digit'});
-    if (!monthMap[k]) monthMap[k] = {volume:0,delivered:0};
-    monthMap[k].volume++;
-    if (getStatus(o)==='delivered') monthMap[k].delivered++;
+    const mk = d.toLocaleString('en',{month:'short',year:'2-digit'});
+    if (!monthMap[mk]) monthMap[mk] = {volume:0,delivered:0};
+    monthMap[mk].volume++;
+    if (getStatus(o)==='delivered') monthMap[mk].delivered++;
+    // Daily aggregation (YYYY-MM-DD) — lets the frontend filter accurately
+    const dk = d.toISOString().slice(0,10);
+    if (!dayMap[dk]) dayMap[dk] = {volume:0,delivered:0,rto:0,cancelled:0,lost:0,active:0,tats:[]};
+    dayMap[dk].volume++;
+    const st = getStatus(o);
+    if (st==='delivered') dayMap[dk].delivered++;
+    else if (['rto','rto_delivered'].includes(st)) dayMap[dk].rto++;
+    else if (st==='cancelled') dayMap[dk].cancelled++;
+    else if (st==='lost') dayMap[dk].lost++;
+    else dayMap[dk].active++;
+    const p = o.pickupDate||getDateFromHistory(o,'PICKED_UP');
+    const dd = o.deliveryDate||getDateFromHistory(o,'DELIVERED');
+    if (p && dd) dayMap[dk].tats.push(daysBetween(p,dd));
   });
   const monthlyTrend = Object.entries(monthMap).slice(-6).map(([month,v]) => ({
     month, volume: v.volume,
     deliveryRate: v.volume ? parseFloat((v.delivered/v.volume*100).toFixed(1)) : 0
+  }));
+  const dailyTrend = Object.entries(dayMap).sort(([a],[b]) => a.localeCompare(b)).map(([day,v]) => ({
+    day,
+    volume: v.volume,
+    delivered: v.delivered,
+    rto: v.rto,
+    cancelled: v.cancelled,
+    lost: v.lost,
+    active: v.active,
+    deliveryRate: v.volume ? parseFloat((v.delivered/v.volume*100).toFixed(1)) : 0,
+    avgTAT: v.tats.length ? parseFloat((v.tats.reduce((a,b)=>a+b,0)/v.tats.length).toFixed(1)) : null
   }));
 
   const tatBuckets={'1':0,'2':0,'3':0,'4':0,'5':0,'6':0,'7':0,'8':0,'9':0,'10+':0};
@@ -471,6 +496,7 @@ function buildDeliveryReport(orders) {
     meta: { lastUpdated: new Date().toISOString(), source: 'Proship API', sampleSize: orders.length },
     kpis: { totalShipments: orders.length, deliveryRate, avgTAT, onTimeDelivery, deliveredCount: delivered.length },
     monthlyTrend,
+    dailyTrend,
     tatDistribution: Object.entries(tatBuckets).map(([days,count])=>({days,count})),
     statusBreakdown: { delivered:delivered.length, rto:rto.length, cancelled:cancelled.length, lost:lost.length, active:active.length },
     onTimeByMonth: monthlyTrend.map(m=>({month:m.month,onTimePct:m.deliveryRate})),

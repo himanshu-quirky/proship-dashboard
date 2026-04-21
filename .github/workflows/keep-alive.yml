@@ -1,0 +1,33 @@
+name: Keep dashboard warm
+
+# Render's free tier spins a service down after ~15 min of inactivity and
+# cold-starts take 30–60 s on the next request. Pinging the URL every 10
+# minutes keeps it warm so the dashboard is instantly responsive AND the
+# in-process cron jobs (Proship polling, daily digest) keep running.
+
+on:
+  schedule:
+    # every 10 minutes
+    - cron: "*/10 * * * *"
+  workflow_dispatch: # allow manual trigger from the Actions tab
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping dashboard
+        run: |
+          URL="https://proship-dashboard-i1md.onrender.com/api/slack/status"
+          echo "Pinging $URL"
+          # Retry up to 3 times — cold starts can take a while
+          for i in 1 2 3; do
+            if curl -fsS -m 60 "$URL" -o /tmp/response.json; then
+              echo "✓ ping ok"
+              cat /tmp/response.json
+              exit 0
+            fi
+            echo "ping attempt $i failed, retrying..."
+            sleep 10
+          done
+          echo "✗ ping failed after 3 attempts"
+          exit 1

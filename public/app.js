@@ -21,7 +21,7 @@ const state = {
   syncing: false,
   tableSort: { key: null, dir: 'asc' },
   tableFilter: {},
-  dateRange: { preset: 'all', from: null, to: null }
+  dateRange: { preset: 'today', from: null, to: null }
 };
 
 const charts = {};
@@ -353,13 +353,9 @@ function setupDateRangeBar() {
         customPanel.classList.add('hidden');
         state.dateRange.from = null;
         state.dateRange.to = null;
-        if (preset === 'all') {
-          activeLabel.classList.add('hidden');
-        } else {
-          activeLabel.classList.remove('hidden');
-          const labels = { '30d': 'Last 30 days', '3m': 'Last 3 months', '6m': 'Last 6 months' };
-          activeLabel.textContent = labels[preset] || '';
-        }
+        activeLabel.classList.remove('hidden');
+        const labels = { 'today': 'Today', '7d': 'Last 7 days', '30d': 'Last 30 days', '3m': 'Last 3 months', '6m': 'Last 6 months' };
+        activeLabel.textContent = labels[preset] || '';
         renderCurrentView();
       }
     });
@@ -379,20 +375,26 @@ function applyCustomRange() {
   const to = document.getElementById('dr-to').value;
   if (!from || !to) { toast('Select both From and To dates', 'error'); return; }
   if (new Date(from) > new Date(to)) { toast('From date must be before To date', 'error'); return; }
+  state.dateRange.preset = 'custom';
   state.dateRange.from = from;
   state.dateRange.to = to;
+  // Mark "Custom" button active so UI stays in sync
+  document.querySelectorAll('.dr-btn').forEach(b => b.classList.remove('active'));
+  document.querySelector('.dr-btn[data-preset="custom"]')?.classList.add('active');
   const activeLabel = document.getElementById('dr-active-label');
   activeLabel.classList.remove('hidden');
-  activeLabel.textContent = `Showing: ${from} → ${to}`;
+  activeLabel.textContent = `${from} → ${to}`;
   renderCurrentView();
 }
 
 function clearCustomRange() {
-  state.dateRange = { preset: 'all', from: null, to: null };
+  state.dateRange = { preset: 'today', from: null, to: null };
   document.querySelectorAll('.dr-btn').forEach(b => b.classList.remove('active'));
-  document.querySelector('.dr-btn[data-preset="all"]').classList.add('active');
+  document.querySelector('.dr-btn[data-preset="today"]')?.classList.add('active');
   document.getElementById('dr-custom').classList.add('hidden');
-  document.getElementById('dr-active-label').classList.add('hidden');
+  const activeLabel = document.getElementById('dr-active-label');
+  activeLabel.classList.remove('hidden');
+  activeLabel.textContent = 'Today';
   document.getElementById('dr-from').value = '';
   document.getElementById('dr-to').value = '';
   renderCurrentView();
@@ -474,59 +476,93 @@ function renderDelivery() {
   if (!d) { el.innerHTML = renderEmpty('delivery data', '📦'); return; }
   const insight = getAIInsight();
 
-  // Apply date range filter to monthly trend with proportional scaling.
-  // Partial-month overlaps (e.g. "Last 30 days" crossing mid-month) are scaled
-  // by the fraction of days that actually fall within the filter range.
+  // Apply date range filter. If the backend provides dailyTrend (new Proship
+  // API sync format), we filter by actual day for accuracy. Otherwise we fall
+  // back to monthly proportional scaling for older HTML-uploaded data.
   const bounds = getDateRangeBounds();
   const allMonthly = d.monthlyTrend || [];
+  const dailyAvailable = Array.isArray(d.dailyTrend) && d.dailyTrend.length > 0;
 
-  // Compute per-month overlap fraction + volume contribution
-  const monthBuckets = allMonthly.map(m => {
-    const dt = parseMonthLabel(m.month);
-    const frac = bounds ? (dt ? monthOverlapFraction(dt, bounds) : 1) : 1;
-    return { ...m, _date: dt, _frac: frac, _volume: Math.round((m.volume||0) * frac) };
-  });
+  let monthlyTrend, onTimeByMonth, k = d.kpis;
+  const filterActive = !!bounds;
+  let filtTotal = 0, filtDelivered = 0;
 
-  // Monthly trend shown in chart = only months with non-zero overlap
-  const monthlyTrend = bounds
-    ? monthBuckets.filter(m => m._frac > 0).map(m => ({ ...m, volume: m._volume }))
-    : allMonthly;
-
-  // Filter on-time by month with the same overlap logic
-  const onTimeByMonth = bounds
-    ? (d.onTimeByMonth || []).filter(m => {
-        const dt = parseMonthLabel(m.month);
-        return !dt || monthOverlapFraction(dt, bounds) > 0;
-      })
-    : (d.onTimeByMonth || []);
+  if (dailyAvailable) {
+    // Day-level filtering — most accurate
+    const days = d.dailyTrend.filter(day => {
+      if (!bounds) return true;
+      const dt = new Date(day.day + 'T12:00:00');
+      return dt >= bounds.from && dt <= bounds.to;
+    });
+    filtTotal = days.reduce((a, x) => a + (x.volume||0), 0);
+    filtDelivered = days.reduce((a, x) => a + (x.delivered||0), 0);
+    const tats = days.flatMap(x => x.avgTAT != null ? [x.avgTAT] : []);
+    const avgTAT = tats.length ? parseFloat((tats.reduce((a,b)=>a+b,0)/tats.length).toFixed(1)) : d.kpis.avgTAT;
+    // Group into months for the chart regardless of selection
+    const monthAgg = {};
+    days.forEach(x => {
+      const mk = new Date(x.day).toLocaleString('en',{month:'short',year:'2-digit'});
+      if (!monthAgg[mk]) monthAgg[mk] = {volume:0,delivered:0};
+      monthAgg[mk].volume += (x.volume||0);
+      monthAgg[mk].delivered += (x.delivered||0);
+    });
+    monthlyTrend = Object.entries(monthAgg).map(([month,v]) => ({
+      month, volume: v.volume,
+      deliveryRate: v.volume ? parseFloat((v.delivered/v.volume*100).toFixed(1)) : 0
+    }));
+    onTimeByMonth = monthlyTrend.map(m => ({ month: m.month, onTimePct: m.deliveryRate }));
+    if (filterActive) {
+      k = {
+        ...d.kpis,
+        totalShipments: filtTotal,
+        deliveredCount: filtDelivered,
+        deliveryRate: filtTotal ? parseFloat((filtDelivered / filtTotal * 100).toFixed(1)) : 0,
+        avgTAT
+      };
+    }
+  } else {
+    // Fallback: monthly-only data → proportional scaling
+    const monthBuckets = allMonthly.map(m => {
+      const dt = parseMonthLabel(m.month);
+      const frac = bounds ? (dt ? monthOverlapFraction(dt, bounds) : 1) : 1;
+      return { ...m, _date: dt, _frac: frac, _volume: Math.round((m.volume||0) * frac) };
+    });
+    monthlyTrend = bounds
+      ? monthBuckets.filter(m => m._frac > 0).map(m => ({ ...m, volume: m._volume }))
+      : allMonthly;
+    onTimeByMonth = bounds
+      ? (d.onTimeByMonth || []).filter(m => {
+          const dt = parseMonthLabel(m.month);
+          return !dt || monthOverlapFraction(dt, bounds) > 0;
+        })
+      : (d.onTimeByMonth || []);
+    if (filterActive) {
+      filtTotal = monthBuckets.reduce((a, m) => a + m._volume, 0);
+      filtDelivered = monthBuckets.reduce((a, m) => a + Math.round(m._volume * (m.deliveryRate||0) / 100), 0);
+      const filtOnTime = onTimeByMonth.length
+        ? parseFloat((onTimeByMonth.reduce((a,m) => a + (m.onTimePct||0), 0) / onTimeByMonth.length).toFixed(1))
+        : d.kpis.onTimeDelivery;
+      k = {
+        ...d.kpis,
+        totalShipments: filtTotal,
+        deliveredCount: filtDelivered,
+        deliveryRate: filtTotal ? parseFloat((filtDelivered / filtTotal * 100).toFixed(1)) : 0,
+        onTimeDelivery: filtOnTime
+      };
+    }
+  }
 
   // Range label for the KPI subtext
   const rangeLabel = (() => {
     if (!bounds) return 'All data';
-    const fmt = dt => dt.toLocaleString('en-IN', { month: 'short', year: 'numeric' });
-    return `${fmt(bounds.from)} – ${fmt(bounds.to)}`;
+    const fmt = dt => dt.toLocaleString('en-IN', { month: 'short', day: 'numeric' });
+    const sameDay = bounds.from.toDateString() === new Date(bounds.to.getTime() - 1000).toDateString();
+    return sameDay ? fmt(bounds.from) : `${fmt(bounds.from)} – ${fmt(bounds.to)}`;
   })();
 
-  // Recalculate all KPIs from the scaled month buckets
-  let k = d.kpis;
-  const filterActive = !!bounds;
-
-  if (filterActive) {
-    const filtTotal = monthBuckets.reduce((a, m) => a + m._volume, 0);
-    const filtDelivered = monthBuckets.reduce((a, m) => a + Math.round(m._volume * (m.deliveryRate||0) / 100), 0);
-    const filtOnTime = onTimeByMonth.length
-      ? parseFloat((onTimeByMonth.reduce((a,m) => a + (m.onTimePct||0), 0) / onTimeByMonth.length).toFixed(1))
-      : d.kpis.onTimeDelivery;
-    k = {
-      ...d.kpis,
-      totalShipments: filtTotal,
-      deliveredCount: filtDelivered,
-      deliveryRate: filtTotal ? parseFloat((filtDelivered / filtTotal * 100).toFixed(1)) : 0,
-      onTimeDelivery: filtOnTime
-    };
-  }
-  // Scale used downstream for status donut / TAT bars / courier counts
-  const originalTotal = allMonthly.reduce((a, m) => a + (m.volume||0), 0) || 1;
+  // Scale used for status donut / TAT bars / courier counts — proportional to
+  // what the filtered volume is vs the total
+  const originalTotal = (d.kpis?.totalShipments) || allMonthly.reduce((a, m) => a + (m.volume||0), 0) || 1;
   const filtTotalForScale = filterActive ? k.totalShipments : originalTotal;
   const scale = filterActive ? filtTotalForScale / originalTotal : 1;
 
