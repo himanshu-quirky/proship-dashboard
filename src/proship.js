@@ -350,33 +350,61 @@ function fetchOrderPage(token, offset, limit) {
   });
 }
 
-// ── Sample orders from across the full history ────────────────────────────────
+// ── Fetch ALL recent orders (paginated) ───────────────────────────────────────
+// Previously this used a 4-page sample which produced misleading aggregates
+// (dashboard showed 80 orders when Proship actually has thousands). Now we
+// paginate forward from offset=0 until we've pulled every order since the
+// cutoff date (default: Dec 1 2025 — what the team actually wants to see).
 async function fetchSampleOrders(username, password) {
   const token = await getToken(username, password);
 
-  // Use 4 concurrent pages spread across the order history
-  const TOTAL = 25068;
-  const OFFSETS = [0, 20, Math.floor(TOTAL * 0.33), Math.floor(TOTAL * 0.66)];
+  const PAGE_SIZE = 500;
+  const MAX_PAGES = 200; // 100k orders safety cap
+  const CUTOFF = new Date('2025-12-01T00:00:00Z');
+  const BATCH = 4;        // parallel pages per round
 
-  console.log(`[Proship] Fetching ${OFFSETS.length} pages (offsets: ${OFFSETS.join(', ')})`);
+  console.log(`[Proship] Paginating orders since ${CUTOFF.toISOString().slice(0,10)} (page size ${PAGE_SIZE})`);
 
-  const pages = await Promise.all(
-    OFFSETS.map(off =>
-      fetchOrderPage(token, off, 20).catch(e => {
-        console.error(`[Proship] offset=${off} error:`, e.message); return [];
-      })
-    )
-  );
+  const seen = new Set();
+  const orders = [];
+  let offset = 0;
+  let rounds = 0;
+  let reachedEnd = false;
+  let reachedCutoff = false;
 
-  // Deduplicate
-  const seen = new Set(), orders = [];
-  for (const page of pages)
-    for (const o of page) {
-      const id = o.orderId || o.id;
-      if (id && !seen.has(id)) { seen.add(id); orders.push(o); }
+  while (!reachedEnd && !reachedCutoff && rounds < MAX_PAGES / BATCH) {
+    const offs = Array.from({ length: BATCH }, (_, i) => offset + i * PAGE_SIZE);
+    const pages = await Promise.all(
+      offs.map(o => fetchOrderPage(token, o, PAGE_SIZE).catch(e => {
+        console.error(`[Proship] offset=${o} error:`, e.message); return [];
+      }))
+    );
+
+    let batchAdded = 0;
+    for (const page of pages) {
+      if (!page.length) { reachedEnd = true; break; }
+      for (const o of page) {
+        const id = o.orderId || o.id;
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        const dRaw = o.createdDate || o.orderDate;
+        const d = dRaw ? new Date(dRaw) : null;
+        // Stop early once we're past the cutoff (orders come newest-first)
+        if (d && !isNaN(d) && d < CUTOFF) { reachedCutoff = true; continue; }
+        orders.push(o);
+        batchAdded++;
+      }
+      if (page.length < PAGE_SIZE) reachedEnd = true;
     }
 
-  console.log(`[Proship] Total unique orders: ${orders.length}`);
+    offset += PAGE_SIZE * BATCH;
+    rounds++;
+    console.log(`[Proship] round ${rounds}: +${batchAdded} new, ${orders.length} total so far`);
+    if (reachedCutoff) { console.log('[Proship] reached cutoff date, stopping'); break; }
+    if (reachedEnd)    { console.log('[Proship] no more orders, stopping'); break; }
+  }
+
+  console.log(`[Proship] Fetched ${orders.length} orders since ${CUTOFF.toISOString().slice(0,10)}`);
   return orders;
 }
 
