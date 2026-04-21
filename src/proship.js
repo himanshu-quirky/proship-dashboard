@@ -374,6 +374,20 @@ function fetchOrderPage(token, offset, limit) {
 
 const MERCHANT_ID = process.env.PROSHIP_MERCHANT_ID || '688cb69e9af82b288c34c4ff';
 
+// ── Courier ID → name lookup ──────────────────────────────────────────────────
+// Control tower returns courier as an ObjectID. /api/courierPartner/{id} resolves
+// to { name, type, ... }. Cache results to avoid re-fetching on every sync.
+const _courierCache = {};
+
+async function resolveCourierName(token, id) {
+  if (!id) return 'Unknown';
+  if (_courierCache[id]) return _courierCache[id];
+  const res = await httpsGet(`/api/courierPartner/${id}`, token);
+  const name = res.json?.result?.name || 'Unknown';
+  _courierCache[id] = name;
+  return name;
+}
+
 function httpsGet(path, token) {
   return new Promise((resolve) => {
     const opts = {
@@ -418,6 +432,17 @@ async function fetchSampleOrders(username, password, { fromDate, toDate } = {}) 
     return [];
   }
 
+  // First pass: collect all unique courier IDs so we can resolve names in parallel
+  const courierIds = new Set();
+  for (const dayEntry of res.json) {
+    for (const group of dayEntry.data || []) {
+      const cid = group._id?.courier;
+      if (cid) courierIds.add(cid);
+    }
+  }
+  console.log(`[Proship] Resolving ${courierIds.size} courier names...`);
+  await Promise.all([...courierIds].map(id => resolveCourierName(token, id)));
+
   // Flatten the grouped-by-day structure into a flat order array
   const seen = new Set();
   const orders = [];
@@ -425,6 +450,7 @@ async function fetchSampleOrders(username, password, { fromDate, toDate } = {}) 
     // dayEntry.time is the day bucket ("YYYY-MM-DD HH:mm")
     const dayStr = String(dayEntry.time || '').slice(0, 10);
     for (const group of dayEntry.data || []) {
+      const courierName = _courierCache[group._id?.courier] || 'Unknown';
       for (const raw of group.data || []) {
         const id = raw.id || raw.awbNumber || raw.orderId;
         if (!id || seen.has(id)) continue;
@@ -445,11 +471,11 @@ async function fetchSampleOrders(username, password, { fromDate, toDate } = {}) 
           pickupDate: raw.estimatedPickupDate,
           lastStatusUpdateTime: raw.lastStatusUpdateTime,
           deliveryDate: raw.orderStatus === 'DELIVERED' ? raw.lastStatusUpdateTime : null,
-          // Courier is an ID in this response; try common name fields too
-          courierPartner: raw.actualCourierProviderName || raw.courierPartnerParent || raw.courierPartner || raw.logisticName || 'Unknown',
-          actualCourierProviderName: raw.actualCourierProviderName,
-          courierPartnerParent: raw.courierPartnerParent,
-          logisticName: raw.logisticName,
+          // Courier name resolved from group._id.courier
+          courierPartner: courierName,
+          actualCourierProviderName: courierName,
+          courierPartnerParent: courierName,
+          logisticName: courierName,
           // Geography
           city: raw.deliveryCity,
           state: raw.deliveryState,
