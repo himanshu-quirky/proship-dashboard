@@ -15,15 +15,12 @@ async function initAuth() {
     return;
   }
 
-  try {
-    await loadScript('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2');
-    if (!window.supabase?.createClient) throw new Error('Supabase library failed to initialize');
-    supabase = window.supabase.createClient(config.supabaseUrl, config.supabaseAnonKey);
-  } catch (err) {
-    console.error('[auth] Supabase load failed:', err);
-    showError('Could not load authentication library. Please refresh the page.');
+  if (!window.supabase?.createClient) {
+    console.error('[auth] Supabase library not loaded');
+    showError('Authentication library failed to load. Please refresh the page.');
     return;
   }
+  supabase = window.supabase.createClient(config.supabaseUrl, config.supabaseAnonKey);
 
   // Sign-out buttons for pending/rejected states
   document.getElementById('signout-pending')?.addEventListener('click', signOut);

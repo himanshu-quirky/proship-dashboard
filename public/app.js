@@ -39,16 +39,8 @@ async function initAuthGuard() {
     return;
   }
 
-  await new Promise((resolve, reject) => {
-    const s = document.createElement('script');
-    s.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
-    s.onload = resolve;
-    s.onerror = reject;
-    document.head.appendChild(s);
-  });
-
   if (!window.supabase?.createClient) {
-    console.error('[auth] Supabase library failed to initialize');
+    console.error('[auth] Supabase library not loaded');
     document.body.classList.add('auth-ready');
     return;
   }
