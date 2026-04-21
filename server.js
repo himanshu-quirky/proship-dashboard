@@ -21,32 +21,50 @@ const supabase = SUPABASE_URL && (SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY
   ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY, { auth: { persistSession: false } })
   : null;
 
-// ADMIN_EMAILS: comma-separated. Anyone in this list gets 'admin' role with
-// full access. Everyone else who's logged in gets 'team' — dashboard views only.
+// ADMIN_EMAILS: env fallback list that always yields admin (useful for first boot
+// before DB roles are seeded). DB user_roles is the source of truth afterwards.
 const ADMIN_EMAILS = new Set(
   (process.env.ADMIN_EMAILS || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
 );
 
-function getRoleForEmail(email) {
-  if (!email) return 'team';
-  return ADMIN_EMAILS.has(email.toLowerCase()) ? 'admin' : 'team';
+const Roles = require('./src/roles');
+
+// Resolve an email to a role row. Returns { role, status }.
+async function resolveRole(user) {
+  if (!user) return { role: null, status: null, email: null };
+  const email = (user.email || '').toLowerCase();
+  const dbRow = await Roles.getRole(supabase, user.id);
+  // Env admins short-circuit: they're always active admin even if DB says otherwise.
+  if (ADMIN_EMAILS.has(email)) return { email, role: 'admin', status: 'active', user_id: user.id };
+  if (dbRow) return { ...dbRow, email };
+  // No DB row yet (trigger may not have fired or table missing) — treat as pending team.
+  return { email, role: 'team', status: 'pending', user_id: user.id };
 }
 
 // Auth middleware — checks Authorization header for Supabase JWT
 async function requireAuth(req, res, next) {
-  if (!supabase) { req.userRole = 'admin'; return next(); } // Auth not configured: open
+  if (!supabase) { req.userRole = 'admin'; req.userStatus = 'active'; return next(); }
   const token = req.headers.authorization?.replace('Bearer ', '');
   if (!token) return res.status(401).json({ error: 'Unauthorized' });
   const { data: { user }, error } = await supabase.auth.getUser(token);
   if (error || !user) return res.status(401).json({ error: 'Invalid or expired token' });
+  const roleRow = await resolveRole(user);
+  if (roleRow.status === 'rejected') {
+    return res.status(403).json({ error: 'Access denied', status: 'rejected' });
+  }
+  if (roleRow.status === 'pending') {
+    return res.status(403).json({ error: 'Awaiting admin approval', status: 'pending' });
+  }
   req.user = user;
-  req.userRole = getRoleForEmail(user.email);
+  req.userRole = roleRow.role;
+  req.userStatus = roleRow.status;
+  req.userEmail = roleRow.email;
   next();
 }
 
 // Admin-only middleware: chain after requireAuth
 function requireAdmin(req, res, next) {
-  if (req.userRole !== 'admin') {
+  if (!Roles.isAdminRole(req.userRole)) {
     return res.status(403).json({ error: 'Admin access required', role: req.userRole || 'team' });
   }
   next();
@@ -340,18 +358,73 @@ app.use('/api', (req, res, next) => {
   });
 });
 
-// Public auth-config endpoint returning the anon key for the frontend
+// Public /api/auth/me — returns authEnabled, email, role, status. Does NOT 403
+// pending users here so the frontend can show a "waiting for approval" screen.
 app.get('/api/auth/me', async (req, res) => {
-  if (!supabase) return res.json({ authEnabled: false, email: null, role: 'admin' });
+  if (!supabase) return res.json({ authEnabled: false, email: null, role: 'admin', status: 'active' });
   const token = req.headers.authorization?.replace('Bearer ', '');
-  if (!token) return res.json({ authEnabled: true, email: null, role: null });
+  if (!token) return res.json({ authEnabled: true, email: null, role: null, status: null });
   const { data: { user }, error } = await supabase.auth.getUser(token);
-  if (error || !user) return res.json({ authEnabled: true, email: null, role: null });
+  if (error || !user) return res.json({ authEnabled: true, email: null, role: null, status: null });
+  const roleRow = await resolveRole(user);
   res.json({
     authEnabled: true,
-    email: user.email,
-    role: getRoleForEmail(user.email)
+    email: roleRow.email,
+    role: roleRow.role,
+    status: roleRow.status
   });
+});
+
+// Admin-only: list all users with their role/status
+app.get('/api/auth/users', async (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!token) return res.status(401).json({ error: 'Unauthorized' });
+  const { data: { user } } = await supabase.auth.getUser(token);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const me = await resolveRole(user);
+  if (!Roles.isAdminRole(me.role) || me.status !== 'active') return res.status(403).json({ error: 'Admin required' });
+  const users = await Roles.listUsers(supabase);
+  res.json({ users });
+});
+
+// Admin-only: approve / reject / set role
+app.post('/api/auth/users/:userId/role', async (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!token) return res.status(401).json({ error: 'Unauthorized' });
+  const { data: { user } } = await supabase.auth.getUser(token);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const me = await resolveRole(user);
+  if (!Roles.isAdminRole(me.role) || me.status !== 'active') return res.status(403).json({ error: 'Admin required' });
+  try {
+    const { role, status } = req.body || {};
+    if (role) {
+      // Only head_admin can set/unset head_admin. Nobody can demote themselves accidentally.
+      if (role === 'head_admin' && me.role !== 'head_admin') return res.status(403).json({ error: 'Only head_admin can assign head_admin' });
+      await Roles.setRole(supabase, req.params.userId, role, me.email);
+    }
+    if (status) {
+      await Roles.setStatus(supabase, req.params.userId, status, me.email);
+    }
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.delete('/api/auth/users/:userId', async (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!token) return res.status(401).json({ error: 'Unauthorized' });
+  const { data: { user } } = await supabase.auth.getUser(token);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const me = await resolveRole(user);
+  if (!Roles.isAdminRole(me.role) || me.status !== 'active') return res.status(403).json({ error: 'Admin required' });
+  if (req.params.userId === user.id) return res.status(400).json({ error: "Can't delete yourself" });
+  try {
+    await Roles.deleteUser(supabase, req.params.userId);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 
 // SSE
@@ -614,8 +687,16 @@ cron.schedule('0 9 * * *', () => {
 }, { timezone: 'Asia/Kolkata' });
 
 // ── Start ─────────────────────────────────────────────────────────────────────
+const Migrations = require('./src/migrations');
+
 app.listen(PORT, async () => {
   console.log(`\nProzoship MIS → http://localhost:${PORT}\n`);
+
+  // Boot-time migrations + admin bootstrap
+  if (supabase) {
+    await Migrations.runMigrations(supabase);
+    await Migrations.bootstrapAdmins(supabase);
+  }
 
   // Start Proship polling if credentials are configured
   const ps = getProship();

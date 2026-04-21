@@ -4,39 +4,64 @@ let supabase = null;
 let isSignUp = false;
 
 async function initAuth() {
-  // Fetch Supabase config from server
   const res = await fetch('/api/auth/config');
   const config = await res.json();
 
   if (!config.authEnabled) {
-    // Auth not configured — redirect to dashboard
     window.location.href = '/';
     return;
   }
 
-  // Load Supabase JS client from CDN
   await loadScript('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js');
-
   supabase = window.supabase.createClient(config.supabaseUrl, config.supabaseAnonKey);
 
-  // Check if user is already logged in
+  // Sign-out buttons for pending/rejected states
+  document.getElementById('signout-pending')?.addEventListener('click', signOut);
+  document.getElementById('signout-rejected')?.addEventListener('click', signOut);
+
+  const params = new URLSearchParams(window.location.search);
   const { data: { session } } = await supabase.auth.getSession();
+
   if (session) {
-    window.location.href = '/';
-    return;
+    // Check status — if pending/rejected, stay here and show message
+    const me = await fetch('/api/auth/me', { headers: { Authorization: `Bearer ${session.access_token}` } }).then(r => r.json()).catch(() => ({}));
+    if (me.status === 'pending' || params.has('pending')) {
+      showStatusMessage('pending');
+      setupListeners();
+      return;
+    }
+    if (me.status === 'rejected' || params.has('rejected')) {
+      showStatusMessage('rejected');
+      setupListeners();
+      return;
+    }
+    if (me.status === 'active') {
+      window.location.replace('/');
+      return;
+    }
   }
 
   // Handle OAuth redirect callback
   const hash = window.location.hash;
   if (hash && hash.includes('access_token')) {
     const { data: { session: newSession } } = await supabase.auth.getSession();
-    if (newSession) {
-      window.location.href = '/';
-      return;
-    }
+    if (newSession) { window.location.replace('/'); return; }
   }
 
   setupListeners();
+}
+
+function showStatusMessage(which) {
+  document.getElementById('email-form')?.classList.add('hidden');
+  document.getElementById('google-signin-btn')?.classList.add('hidden');
+  document.querySelector('.divider')?.classList.add('hidden');
+  document.querySelector('.auth-toggle')?.classList.add('hidden');
+  document.getElementById(which === 'pending' ? 'status-pending' : 'status-rejected')?.classList.remove('hidden');
+}
+
+async function signOut() {
+  if (supabase) await supabase.auth.signOut();
+  window.location.replace('/login');
 }
 
 function loadScript(src) {
