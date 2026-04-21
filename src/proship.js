@@ -350,61 +350,43 @@ function fetchOrderPage(token, offset, limit) {
   });
 }
 
-// ── Fetch ALL recent orders (paginated) ───────────────────────────────────────
-// Paginate through /api/order/search starting at offset 0, in small parallel
-// batches (4 pages × 20 orders = 80 per round — same shape the previous
-// sampling code used, which is known to work). Keep going until we either
-// cross the Dec 1 2025 cutoff or hit 3 consecutive empty/failed batches.
+// ── Fetch sample orders across full history ───────────────────────────────────
+// NOTE: /api/order/search doesn't expose a date filter, so paginating from
+// offset=0 through 25k+ orders is slow (~10 min). Several attempts at true
+// pagination returned 0 orders — likely the streaming JSON parser in
+// OrderExtractor doesn't survive many parallel/sequential requests with a
+// long-lived token. Until we migrate to Proship's control tower API
+// (/api/external/ct/controltower/v1/wms/freightsnapshot/bydate/...) which
+// DOES support from_date/to_date, we fall back to the original sparse sample
+// — 4 pages × 20 orders spread across the order history. This produces
+// approximate aggregates (NOT accurate totals) but at least the dashboard
+// renders with non-zero data.
 async function fetchSampleOrders(username, password) {
   const token = await getToken(username, password);
 
-  const PAGE_SIZE = 20;
-  const BATCH = 4;
-  const MAX_ROUNDS = 500;
-  const CUTOFF = new Date('2025-12-01T00:00:00Z');
+  // Offsets spread across the history so we get orders from multiple months.
+  // TOTAL is hardcoded from a previous snapshot — rough but serviceable.
+  const TOTAL = 25068;
+  const OFFSETS = [0, 20, Math.floor(TOTAL * 0.33), Math.floor(TOTAL * 0.66)];
 
-  console.log(`[Proship] Paginating since ${CUTOFF.toISOString().slice(0,10)} (page ${PAGE_SIZE}, ${BATCH} parallel)`);
+  console.log(`[Proship] Sampling ${OFFSETS.length} pages at offsets ${OFFSETS.join(', ')}`);
 
-  const seen = new Set();
-  const orders = [];
-  let offset = 0;
-  let rounds = 0;
-  let consecutiveEmpty = 0;
-  let cutoffHit = false;
+  const pages = await Promise.all(
+    OFFSETS.map(off =>
+      fetchOrderPage(token, off, 20).catch(e => {
+        console.error(`[Proship] offset=${off} error:`, e.message); return [];
+      })
+    )
+  );
 
-  while (rounds < MAX_ROUNDS && !cutoffHit && consecutiveEmpty < 3) {
-    const offs = Array.from({ length: BATCH }, (_, i) => offset + i * PAGE_SIZE);
-    const pages = await Promise.all(
-      offs.map(o => fetchOrderPage(token, o, PAGE_SIZE).catch(e => {
-        console.error(`[Proship] offset=${o} error:`, e.message); return [];
-      }))
-    );
-
-    let batchAdded = 0;
-    let batchTotal = 0;
-    for (const page of pages) {
-      batchTotal += page.length;
-      for (const o of page) {
-        const id = o.orderId || o.id;
-        if (!id || seen.has(id)) continue;
-        seen.add(id);
-        const dRaw = o.createdDate || o.orderDate;
-        const d = dRaw ? new Date(dRaw) : null;
-        if (d && !isNaN(d) && d < CUTOFF) { cutoffHit = true; continue; }
-        orders.push(o);
-        batchAdded++;
-      }
+  const seen = new Set(), orders = [];
+  for (const page of pages)
+    for (const o of page) {
+      const id = o.orderId || o.id;
+      if (id && !seen.has(id)) { seen.add(id); orders.push(o); }
     }
 
-    if (batchTotal === 0) consecutiveEmpty++;
-    else consecutiveEmpty = 0;
-
-    offset += PAGE_SIZE * BATCH;
-    rounds++;
-    console.log(`[Proship] round ${rounds}: got ${batchTotal} orders, ${batchAdded} new, ${orders.length} total (cutoffHit=${cutoffHit})`);
-  }
-
-  console.log(`[Proship] Done — ${orders.length} orders since ${CUTOFF.toISOString().slice(0,10)}`);
+  console.log(`[Proship] Total unique orders: ${orders.length}`);
   return orders;
 }
 
