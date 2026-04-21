@@ -66,9 +66,19 @@ async function init(store, sendSSE) {
     fetchLatestBaileysVersion
   } = Baileys;
 
-  fs.mkdirSync(AUTH_DIR, { recursive: true });
-
-  const { state: authState, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
+  // Prefer Supabase-backed auth (survives Render deploys). Fall back to the
+  // file-based auth when Supabase isn't configured.
+  const sb = require('./supabase-store');
+  let authState, saveCreds;
+  if (sb.isEnabled()) {
+    const { useSupabaseAuthState } = require('./wa-auth-supabase');
+    ({ state: authState, saveCreds } = await useSupabaseAuthState(Baileys));
+    console.log('[WA] Using Supabase-backed auth state');
+  } else {
+    fs.mkdirSync(AUTH_DIR, { recursive: true });
+    ({ state: authState, saveCreds } = await useMultiFileAuthState(AUTH_DIR));
+    console.log('[WA] Using file-based auth at', AUTH_DIR);
+  }
 
   let version = [2, 3000, 1015901307]; // fallback
   try {
@@ -220,6 +230,7 @@ async function disconnect() {
   _groupCache  = [];
   // Wipe saved auth so next scan starts fresh
   try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }); } catch (e) {}
+  try { const sb = require('./supabase-store'); if (sb.isEnabled()) await sb.clearAllWAAuth(); } catch (e) {}
 }
 
 module.exports = {

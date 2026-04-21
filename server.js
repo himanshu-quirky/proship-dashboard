@@ -78,25 +78,48 @@ let store = {
 };
 
 const STORE_PATH = path.join(__dirname, 'data', 'store.json');
+const sbStore = require('./src/supabase-store');
 
-function loadStore() {
+async function loadStore() {
+  // Prefer Supabase (survives Render deploys); fall back to local JSON.
+  if (sbStore.isEnabled()) {
+    try {
+      const settings = await sbStore.loadSettings(store.settings);
+      const data = await sbStore.loadStore();
+      store.settings = { ...store.settings, ...settings };
+      store.delivery = data.delivery || null;
+      store.pickup = data.pickup || null;
+      store.cancellations = data.cancellations || null;
+      store.lastProshipSync = data.lastProshipSync || null;
+      console.log('[store] Loaded from Supabase');
+    } catch (e) {
+      console.error('[store] Supabase load failed, falling back to file:', e.message);
+      loadStoreFromFile();
+    }
+  } else {
+    loadStoreFromFile();
+  }
+  // Env credentials take precedence
+  if (process.env.PROSHIP_USERNAME) store.settings.proshipUsername = process.env.PROSHIP_USERNAME;
+  if (process.env.PROSHIP_PASSWORD) store.settings.proshipPassword = process.env.PROSHIP_PASSWORD;
+}
+
+function loadStoreFromFile() {
   try {
     if (fs.existsSync(STORE_PATH)) {
       const saved = JSON.parse(fs.readFileSync(STORE_PATH, 'utf8'));
-      // Only restore data that came from the live API — discard old HTML-upload data
       store.delivery = saved.delivery || null;
       store.pickup = saved.pickup || null;
       store.cancellations = saved.cancellations || null;
       store.lastProshipSync = saved.lastProshipSync || null;
       store.settings = { ...store.settings, ...saved.settings };
-      // Env credentials take precedence over stored ones if set
-      if (process.env.PROSHIP_USERNAME) store.settings.proshipUsername = process.env.PROSHIP_USERNAME;
-      if (process.env.PROSHIP_PASSWORD) store.settings.proshipPassword = process.env.PROSHIP_PASSWORD;
     }
   } catch (e) { console.error('Store load error:', e.message); }
 }
 
 function saveStore() {
+  // Always write the local file (for local dev). Also write to Supabase if
+  // configured so deploys don't wipe the state.
   try {
     fs.mkdirSync(path.join(__dirname, 'data'), { recursive: true });
     fs.writeFileSync(STORE_PATH, JSON.stringify({
@@ -107,9 +130,20 @@ function saveStore() {
       settings: store.settings
     }, null, 2));
   } catch (e) { console.error('Store save error:', e.message); }
+
+  if (sbStore.isEnabled()) {
+    Promise.all([
+      sbStore.saveSettings(store.settings),
+      sbStore.saveStoreKey('delivery', store.delivery),
+      sbStore.saveStoreKey('pickup', store.pickup),
+      sbStore.saveStoreKey('cancellations', store.cancellations),
+      sbStore.saveStoreKey('lastProshipSync', store.lastProshipSync)
+    ]).catch(e => console.error('[store] Supabase save error:', e.message));
+  }
 }
 
-loadStore();
+// Kick off initial load (async, won't block)
+loadStore().catch(e => console.error('[store] Initial load error:', e.message));
 
 // ── SSE ────────────────────────────────────────────────────────────────────────
 const sseClients = [];
