@@ -21,7 +21,8 @@ const state = {
   syncing: false,
   tableSort: { key: null, dir: 'asc' },
   tableFilter: {},
-  dateRange: { preset: 'today', from: null, to: null }
+  dateRange: { preset: 'today', from: null, to: null },
+  currentUser: { email: null, role: null }
 };
 
 const charts = {};
@@ -32,7 +33,11 @@ let _authToken = null;
 
 async function initAuthGuard() {
   const config = await fetch('/api/auth/config').then(r => r.json()).catch(() => ({ authEnabled: false }));
-  if (!config.authEnabled) return; // No auth configured — allow access
+  if (!config.authEnabled) {
+    // Auth not configured — everyone is treated as admin
+    state.currentUser = { email: null, role: 'admin' };
+    return;
+  }
 
   // Load Supabase JS
   await new Promise((resolve, reject) => {
@@ -53,7 +58,18 @@ async function initAuthGuard() {
     if (!session) { window.location.href = '/login'; return; }
     _authToken = session.access_token;
   });
+
+  // Fetch the user's role so the UI can hide admin-only controls
+  try {
+    const me = await fetch('/api/auth/me', { headers: { Authorization: `Bearer ${_authToken}` } }).then(r => r.json());
+    state.currentUser = { email: me.email, role: me.role || 'team' };
+    console.log('[auth]', state.currentUser);
+  } catch (e) {
+    state.currentUser = { email: null, role: 'team' };
+  }
 }
+
+function isAdmin() { return state.currentUser?.role === 'admin'; }
 
 // ── API ───────────────────────────────────────────────────────────────────────
 async function api(path, opts = {}) {
@@ -1730,6 +1746,7 @@ function toast(msg, type = 'info') {
 // ── Init ──────────────────────────────────────────────────────────────────────
 async function init() {
   await initAuthGuard();
+  applyRoleToUI();
   setupSSE();
   setupNavigation();
   setupNotifPanel();
@@ -1738,8 +1755,51 @@ async function init() {
   await loadData();
   const lu = state.delivery?.meta?.lastUpdated || state.pickup?.meta?.lastUpdated || state.cancellations?.meta?.lastUpdated;
   if (lu) document.getElementById('sidebar-last-updated').textContent = `Updated ${fmtDate(lu)}`;
+  // If team role landed on an admin-only view (URL hash), bounce them to Summary
+  if (!isAdmin() && (state.view === 'settings' || state.view === 'broadcast')) {
+    state.view = 'delivery';
+  }
   renderCurrentView();
   updateTopBar();
+  renderUserBadge();
+}
+
+// Hide Settings + Notifications nav items for non-admins. Also mark body so
+// CSS can hide inline admin-only buttons (Upload Reports, Refresh, etc.)
+function applyRoleToUI() {
+  const admin = isAdmin();
+  document.body.classList.toggle('role-admin', admin);
+  document.body.classList.toggle('role-team', !admin);
+  if (!admin) {
+    // Hide nav items that only admins should see
+    document.querySelectorAll('[data-view="settings"], [data-view="broadcast"]').forEach(el => el.classList.add('hidden'));
+    // Hide "Upload Reports" in the topbar
+    document.getElementById('upload-trigger-btn')?.classList.add('hidden');
+  }
+}
+
+// Small user chip under the sidebar showing current email + role, with sign-out
+function renderUserBadge() {
+  const footer = document.querySelector('.sidebar-footer');
+  if (!footer || !state.currentUser?.email) return;
+  const existing = document.getElementById('user-badge');
+  if (existing) existing.remove();
+  const div = document.createElement('div');
+  div.id = 'user-badge';
+  div.className = 'user-badge';
+  const role = state.currentUser.role || 'team';
+  div.innerHTML = `
+    <div class="user-badge-line user-badge-email" title="${esc(state.currentUser.email)}">${esc(state.currentUser.email)}</div>
+    <div class="user-badge-line">
+      <span class="user-role role-${role}">${role === 'admin' ? 'Admin' : 'Team'}</span>
+      <button class="btn-text" onclick="signOut()">Sign out</button>
+    </div>`;
+  footer.insertBefore(div, footer.firstChild);
+}
+
+async function signOut() {
+  try { if (_supabaseClient) await _supabaseClient.auth.signOut(); } catch (e) {}
+  window.location.href = '/login';
 }
 
 document.addEventListener('DOMContentLoaded', init);

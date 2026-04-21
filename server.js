@@ -11,21 +11,44 @@ const { createClient } = require('@supabase/supabase-js');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ── Supabase ─────────────────────────────────────────────────────────────────
+// ── Supabase + Roles ─────────────────────────────────────────────────────────
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || '';
-const supabase = SUPABASE_URL && SUPABASE_ANON_KEY
-  ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+// Verification uses the service_role key (or anon if provided). The frontend
+// gets only the anon key via /api/auth/config and never sees service_role.
+const supabase = SUPABASE_URL && (SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY)
+  ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY, { auth: { persistSession: false } })
   : null;
+
+// ADMIN_EMAILS: comma-separated. Anyone in this list gets 'admin' role with
+// full access. Everyone else who's logged in gets 'team' — dashboard views only.
+const ADMIN_EMAILS = new Set(
+  (process.env.ADMIN_EMAILS || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
+);
+
+function getRoleForEmail(email) {
+  if (!email) return 'team';
+  return ADMIN_EMAILS.has(email.toLowerCase()) ? 'admin' : 'team';
+}
 
 // Auth middleware — checks Authorization header for Supabase JWT
 async function requireAuth(req, res, next) {
-  if (!supabase) return next(); // Skip auth if Supabase not configured
+  if (!supabase) { req.userRole = 'admin'; return next(); } // Auth not configured: open
   const token = req.headers.authorization?.replace('Bearer ', '');
   if (!token) return res.status(401).json({ error: 'Unauthorized' });
   const { data: { user }, error } = await supabase.auth.getUser(token);
   if (error || !user) return res.status(401).json({ error: 'Invalid or expired token' });
   req.user = user;
+  req.userRole = getRoleForEmail(user.email);
+  next();
+}
+
+// Admin-only middleware: chain after requireAuth
+function requireAdmin(req, res, next) {
+  if (req.userRole !== 'admin') {
+    return res.status(403).json({ error: 'Admin access required', role: req.userRole || 'team' });
+  }
   next();
 }
 
@@ -287,14 +310,48 @@ function getProship() {
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 
+// Paths that MODIFY dashboard settings/integrations — admin-only.
+// GETs on these paths still go through (so read-only status checks work).
+const ADMIN_WRITE_PATHS = [
+  /^\/settings$/,
+  /^\/upload$/,
+  /^\/proship\/test$/,
+  /^\/whatsapp\/(init|send|disconnect)$/,
+  /^\/email\/(test|digest)$/,
+  /^\/slack\/(test|digest)$/
+];
+
 // Protect all API routes (except /api/auth/*) with auth middleware
 app.use('/api', (req, res, next) => {
   if (req.path.startsWith('/auth/')) return next();
+  // Webhook receiver from Prozo — external caller, no auth expected
+  if (req.path === '/webhook/prozo') return next();
   // SSE: accept token from query string since EventSource can't set headers
   if (!req.headers.authorization && req.query.token) {
     req.headers.authorization = `Bearer ${req.query.token}`;
   }
-  requireAuth(req, res, next);
+  requireAuth(req, res, (err) => {
+    if (err) return next(err);
+    // After auth, if this is a mutating request on an admin-only path, enforce admin
+    if (req.method !== 'GET' && ADMIN_WRITE_PATHS.some(rx => rx.test(req.path))) {
+      return requireAdmin(req, res, next);
+    }
+    next();
+  });
+});
+
+// Public auth-config endpoint returning the anon key for the frontend
+app.get('/api/auth/me', async (req, res) => {
+  if (!supabase) return res.json({ authEnabled: false, email: null, role: 'admin' });
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!token) return res.json({ authEnabled: true, email: null, role: null });
+  const { data: { user }, error } = await supabase.auth.getUser(token);
+  if (error || !user) return res.json({ authEnabled: true, email: null, role: null });
+  res.json({
+    authEnabled: true,
+    email: user.email,
+    role: getRoleForEmail(user.email)
+  });
 });
 
 // SSE

@@ -1020,6 +1020,52 @@ table.data-table tfoot td {
 .broadcast-result.ok { background: var(--green-bg); color: var(--green-text); border: 1px solid var(--green-border); }
 .broadcast-result.partial { background: var(--amber-bg); color: var(--amber-text); border: 1px solid var(--amber-border); }
 
+/* ── User badge (sidebar footer) ───────────────────────────────────────────── */
+.user-badge {
+  border-top: 1px solid var(--sidebar-border);
+  border-bottom: 1px solid var(--sidebar-border);
+  padding: 10px 12px;
+  margin-bottom: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.user-badge-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.user-badge-email {
+  font-size: 11.5px;
+  color: var(--sidebar-text-hover);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.user-role {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 1px 7px;
+  border-radius: 10px;
+}
+.user-role.role-admin {
+  background: rgba(45, 106, 79, 0.25);
+  color: #4ADE80;
+}
+.user-role.role-team {
+  background: rgba(100, 116, 139, 0.25);
+  color: #94A3B8;
+}
+.user-badge .btn-text {
+  font-size: 11px;
+  color: var(--sidebar-text);
+}
+.user-badge .btn-text:hover { color: var(--sidebar-text-hover); }
+
 /* ── Scrollbar ─────────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
