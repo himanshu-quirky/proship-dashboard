@@ -78,6 +78,12 @@ app.get('/login', (req, res) => res.sendFile(path.join(__dirname, 'public', 'log
 app.get('/login.css', (req, res) => res.sendFile(path.join(__dirname, 'public', 'login.css')));
 app.get('/login.js', (req, res) => res.sendFile(path.join(__dirname, 'public', 'login.js')));
 
+// Serve Supabase UMD from same origin so we don't depend on CDN global-attach
+app.get('/vendor/supabase.js', (req, res) => {
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  res.sendFile(path.join(__dirname, 'node_modules', '@supabase', 'supabase-js', 'dist', 'umd', 'supabase.js'));
+});
+
 // Auth config endpoint (public — provides Supabase URL/key to frontend)
 app.get('/api/auth/config', (req, res) => {
   res.json({
