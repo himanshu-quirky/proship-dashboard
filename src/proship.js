@@ -350,43 +350,129 @@ function fetchOrderPage(token, offset, limit) {
   });
 }
 
-// ── Fetch sample orders across full history ───────────────────────────────────
-// NOTE: /api/order/search doesn't expose a date filter, so paginating from
-// offset=0 through 25k+ orders is slow (~10 min). Several attempts at true
-// pagination returned 0 orders — likely the streaming JSON parser in
-// OrderExtractor doesn't survive many parallel/sequential requests with a
-// long-lived token. Until we migrate to Proship's control tower API
-// (/api/external/ct/controltower/v1/wms/freightsnapshot/bydate/...) which
-// DOES support from_date/to_date, we fall back to the original sparse sample
-// — 4 pages × 20 orders spread across the order history. This produces
-// approximate aggregates (NOT accurate totals) but at least the dashboard
-// renders with non-zero data.
-async function fetchSampleOrders(username, password) {
+// ── Fetch orders via Proship's control tower API ──────────────────────────────
+// This is what Proship's own dashboard uses — it's date-filtered server-side,
+// returns orders grouped by day, and is dramatically more accurate than
+// paginating /api/order/search. Endpoint discovered via network inspection
+// on proship.in/dashboard.
+//
+//   GET /api/external/ct/controltower/v1/wms/freightsnapshot/bydate/
+//       all_awb_registered_orders_today_grouped_by_mechant
+//     ?from_date=YYYY-MM-DD&to_date=YYYY-MM-DD
+//     &merchant_list=<MERCHANT_ID>
+//     &shipmentType_list=B2C
+//
+// Response shape:
+//   [
+//     { type, time:"2026-04-17 00:00", merchant, courier,
+//       data: [ { _id:{...}, data:[ <order1>, <order2>, ... ] }, ... ] },
+//     ... one top-level entry per day in the range ...
+//   ]
+//
+// Each order has orderStatus, awbNumber, orderId, awbRegisteredDate,
+// estimatedPickupDate, lastStatusUpdateTime, deliveryCity, etc.
+
+const MERCHANT_ID = process.env.PROSHIP_MERCHANT_ID || '688cb69e9af82b288c34c4ff';
+
+function httpsGet(path, token) {
+  return new Promise((resolve) => {
+    const opts = {
+      hostname: BASE_HOST, port: 443, path, method: 'GET',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+    };
+    const req = https.request(opts, res => {
+      const chunks = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => {
+        try { resolve({ status: res.statusCode, json: JSON.parse(Buffer.concat(chunks).toString('utf8')) }); }
+        catch (e) { resolve({ status: res.statusCode, json: null }); }
+      });
+      res.on('error', () => resolve({ status: 0, json: null }));
+    });
+    req.on('error', () => resolve({ status: 0, json: null }));
+    req.end();
+  });
+}
+
+function ymd(d) { return d.toISOString().slice(0, 10); }
+
+async function fetchSampleOrders(username, password, { fromDate, toDate } = {}) {
   const token = await getToken(username, password);
 
-  // Offsets spread across the history so we get orders from multiple months.
-  // TOTAL is hardcoded from a previous snapshot — rough but serviceable.
-  const TOTAL = 25068;
-  const OFFSETS = [0, 20, Math.floor(TOTAL * 0.33), Math.floor(TOTAL * 0.66)];
+  // Default: Dec 1, 2025 → today (plus one day for inclusivity safety)
+  const to = toDate ? new Date(toDate) : new Date();
+  const from = fromDate ? new Date(fromDate) : new Date('2025-12-01T00:00:00Z');
+  const toPlus = new Date(to.getTime() + 86400000); // API to_date may be exclusive
 
-  console.log(`[Proship] Sampling ${OFFSETS.length} pages at offsets ${OFFSETS.join(', ')}`);
+  const path = `/api/external/ct/controltower/v1/wms/freightsnapshot/bydate/all_awb_registered_orders_today_grouped_by_mechant` +
+    `?from_date=${ymd(from)}` +
+    `&to_date=${ymd(toPlus)}` +
+    `&merchant_list=${MERCHANT_ID}` +
+    `&shipmentType_list=B2C`;
 
-  const pages = await Promise.all(
-    OFFSETS.map(off =>
-      fetchOrderPage(token, off, 20).catch(e => {
-        console.error(`[Proship] offset=${off} error:`, e.message); return [];
-      })
-    )
-  );
+  console.log(`[Proship] Control tower: ${ymd(from)} → ${ymd(toPlus)}`);
+  const res = await httpsGet(path, token);
 
-  const seen = new Set(), orders = [];
-  for (const page of pages)
-    for (const o of page) {
-      const id = o.orderId || o.id;
-      if (id && !seen.has(id)) { seen.add(id); orders.push(o); }
+  if (res.status !== 200 || !Array.isArray(res.json)) {
+    console.error(`[Proship] Control tower returned HTTP ${res.status}`);
+    return [];
+  }
+
+  // Flatten the grouped-by-day structure into a flat order array
+  const seen = new Set();
+  const orders = [];
+  for (const dayEntry of res.json) {
+    // dayEntry.time is the day bucket ("YYYY-MM-DD HH:mm")
+    const dayStr = String(dayEntry.time || '').slice(0, 10);
+    for (const group of dayEntry.data || []) {
+      for (const raw of group.data || []) {
+        const id = raw.id || raw.awbNumber || raw.orderId;
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        // Normalise so the rest of the report builders (which expect the old
+        // /api/order/search shape) keep working
+        orders.push({
+          orderId: raw.orderId,
+          id: raw.id,
+          awbNumber: raw.awbNumber,
+          orderStatus: raw.orderStatus,
+          currentStatus: raw.orderStatus,
+          // Date fields: prefer awbRegisteredDate, fall back to day bucket
+          createdDate: raw.awbRegisteredDate || dayStr,
+          orderDate: raw.awbRegisteredDate || dayStr,
+          awbRegisteredDate: raw.awbRegisteredDate,
+          estimatedPickupDate: raw.estimatedPickupDate,
+          pickupDate: raw.estimatedPickupDate,
+          lastStatusUpdateTime: raw.lastStatusUpdateTime,
+          deliveryDate: raw.orderStatus === 'DELIVERED' ? raw.lastStatusUpdateTime : null,
+          // Courier is an ID in this response; try common name fields too
+          courierPartner: raw.actualCourierProviderName || raw.courierPartnerParent || raw.courierPartner || raw.logisticName || 'Unknown',
+          actualCourierProviderName: raw.actualCourierProviderName,
+          courierPartnerParent: raw.courierPartnerParent,
+          logisticName: raw.logisticName,
+          // Geography
+          city: raw.deliveryCity,
+          state: raw.deliveryState,
+          pincode: raw.dropPincode,
+          pickupCity: raw.pickupCity,
+          pickupState: raw.pickupState,
+          pickupPincode: group._id?.pickupPincode,
+          // Financials + shipment metrics
+          invoiceValue: raw.invoiceValue,
+          price: raw.price,
+          courierPrice: raw.courierPrice,
+          weight: raw.shipment_weight,
+          length: raw.shipment_length,
+          breadth: raw.shipment_breadth,
+          height: raw.shipment_height,
+          // Pass raw for debugging
+          _raw: raw
+        });
+      }
     }
+  }
 
-  console.log(`[Proship] Total unique orders: ${orders.length}`);
+  console.log(`[Proship] Fetched ${orders.length} orders across ${res.json.length} days`);
   return orders;
 }
 
