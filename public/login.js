@@ -27,7 +27,18 @@ async function initAuth() {
     showError('Authentication library failed to load. Please refresh the page.');
     return;
   }
-  supabase = window.supabase.createClient(config.supabaseUrl, config.supabaseAnonKey);
+  if (!config.supabaseAnonKey) {
+    console.error('[auth] Supabase anon key missing from server config');
+    showError('Auth configuration error — contact the administrator.');
+    return;
+  }
+  try {
+    supabase = window.supabase.createClient(config.supabaseUrl, config.supabaseAnonKey);
+  } catch (err) {
+    console.error('[auth] createClient failed:', err);
+    showError('Auth configuration error — contact the administrator.');
+    return;
+  }
 
   // Sign-out buttons for pending/rejected states
   document.getElementById('signout-pending')?.addEventListener('click', signOut);
