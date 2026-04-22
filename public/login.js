@@ -3,9 +3,16 @@
 let supabase = null;
 let isSignUp = false;
 
+// Belt-and-suspenders: intercept the form's native submit BEFORE initAuth's
+// async work runs. Any later failure (Supabase library missing, network error,
+// etc.) won't cause the browser to do a native GET and reload the page.
+(function installFormGuard() {
+  const form = document.getElementById('email-form');
+  if (form) form.addEventListener('submit', (e) => e.preventDefault(), true);
+})();
+
 async function initAuth() {
-  // Always intercept form submit so we never do a native GET on /login
-  document.getElementById('email-form')?.addEventListener('submit', (e) => e.preventDefault());
+  console.log('[auth] initAuth; supabase lib present:', !!window.supabase?.createClient);
 
   const res = await fetch('/api/auth/config');
   const config = await res.json();
