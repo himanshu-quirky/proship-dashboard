@@ -74,9 +74,13 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Serve login page (no auth required)
-app.get('/login', (req, res) => res.sendFile(path.join(__dirname, 'public', 'login.html')));
-app.get('/login.css', (req, res) => res.sendFile(path.join(__dirname, 'public', 'login.css')));
-app.get('/login.js', (req, res) => res.sendFile(path.join(__dirname, 'public', 'login.js')));
+const noCacheHtml = (res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+};
+app.get('/login', (req, res) => { noCacheHtml(res); res.sendFile(path.join(__dirname, 'public', 'login.html')); });
+app.get('/login.css', (req, res) => { noCacheHtml(res); res.sendFile(path.join(__dirname, 'public', 'login.css')); });
+app.get('/login.js', (req, res) => { noCacheHtml(res); res.sendFile(path.join(__dirname, 'public', 'login.js')); });
 
 // Serve Supabase UMD from same origin so we don't depend on CDN global-attach
 app.get('/vendor/supabase.js', (req, res) => {
