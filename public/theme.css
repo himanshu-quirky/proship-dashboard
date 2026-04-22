@@ -585,3 +585,207 @@ table tbody tr:hover td { background: var(--surface-2) !important; }
   color: var(--editorial);
   letter-spacing: -0.01em;
 }
+
+/* ─── Dark mode fixes ─────────────────────────────────────────────────────── */
+
+/* Unread notif items had a hardcoded light-blue bg */
+.notif-item.unread {
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface)) !important;
+}
+
+/* info-strip (SMTP not configured, etc.) */
+.info-strip {
+  background: var(--amber-bg) !important;
+  border-color: var(--amber-border) !important;
+  color: var(--text) !important;
+}
+.info-strip code {
+  background: rgba(0,0,0,0.06) !important;
+  color: var(--text-2) !important;
+}
+body.dark .info-strip code { background: rgba(255,255,255,0.07) !important; }
+
+/* Notification tabs — active tab should use accent, not var(--blue) */
+.notif-tab.active {
+  background: var(--accent) !important;
+  color: #fff !important;
+  border-color: transparent !important;
+}
+.notif-tab.active .notif-tab-dot.dot-muted { background: rgba(255,255,255,0.5) !important; }
+
+/* broadcast-group-item checked uses blue-light which is dark in dark mode */
+.broadcast-group-item.checked {
+  background: var(--accent-soft) !important;
+  border-color: var(--accent-border);
+}
+.broadcast-group-item.checked .broadcast-group-name { color: var(--accent-ink); }
+.broadcast-group-item input { accent-color: var(--accent) !important; }
+
+/* slack-mode-option selected */
+.slack-mode-option.selected {
+  background: var(--accent-soft) !important;
+  border-color: var(--accent-border) !important;
+}
+.slack-mode-option.selected .mode-meta {
+  background: var(--accent-soft) !important;
+  border-color: var(--accent-border) !important;
+  color: var(--accent-ink) !important;
+}
+.slack-mode-option input { accent-color: var(--accent) !important; }
+
+/* filter-input in dark mode */
+.filter-input {
+  background: var(--surface) !important;
+  border-color: var(--border) !important;
+  color: var(--text) !important;
+}
+
+/* form inputs global dark mode */
+.form-input, .form-select {
+  background: var(--surface) !important;
+  border-color: var(--border) !important;
+  color: var(--text) !important;
+}
+.form-input:focus, .form-select:focus { border-color: var(--accent) !important; }
+.form-hint { color: var(--text-3) !important; }
+.form-label { color: var(--text-2) !important; }
+
+/* settings card */
+.settings-card {
+  background: var(--surface) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--r-lg) !important;
+}
+.settings-card-header { border-bottom: 1px solid var(--border) !important; }
+.settings-card-title { color: var(--text) !important; font-weight: 650 !important; }
+
+/* wa section */
+.wa-connected-badge { color: var(--green-text) !important; }
+.qr-frame { background: var(--surface-2) !important; border-color: var(--border) !important; }
+.qr-placeholder { color: var(--text-3) !important; }
+
+/* user badge */
+.user-badge {
+  background: var(--sidebar-bg-2) !important;
+  border: 1px solid var(--sidebar-border) !important;
+  border-radius: var(--r-sm) !important;
+  padding: 8px 10px !important;
+  margin: 4px 0 0 !important;
+}
+.user-badge-email { color: var(--sidebar-text-hover) !important; font-size: 11.5px !important; }
+.user-badge .user-badge-line { color: var(--sidebar-text) !important; }
+.user-role { font-size: 10.5px !important; font-weight: 600 !important; padding: 1px 7px !important; border-radius: 8px !important; }
+.user-role.role-admin, .user-role.role-super_admin, .user-role.role-head_admin {
+  background: var(--accent-soft) !important;
+  color: var(--accent-ink) !important;
+}
+.user-role.role-team { background: var(--surface-3) !important; color: var(--text-3) !important; }
+
+/* ─── Notification feed page ──────────────────────────────────────────────── */
+.notif-feed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+}
+.notif-feed-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: background 0.1s;
+  position: relative;
+}
+.notif-feed-item:last-child { border-bottom: none; }
+.notif-feed-item:hover { background: var(--surface-2) !important; }
+.notif-feed-item.unread { background: color-mix(in srgb, var(--accent) 5%, var(--surface)); }
+.notif-feed-icon {
+  width: 30px; height: 30px; flex-shrink: 0;
+  border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-3);
+}
+.notif-feed-icon.type-breach { background: var(--red-bg); border-color: var(--red-border); color: var(--red-text); }
+.notif-feed-icon.type-ai_analysis { background: var(--accent-soft); border-color: var(--accent-border); color: var(--accent-ink); }
+.notif-feed-icon.type-sync { background: var(--green-bg); border-color: var(--green-border); color: var(--green-text); }
+.notif-feed-body { flex: 1; min-width: 0; }
+.notif-feed-text { font-size: 13px; color: var(--text); line-height: 1.5; }
+.notif-feed-time { font-size: 11px; color: var(--text-3); margin-top: 3px; font-family: 'JetBrains Mono', monospace; }
+.notif-feed-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--accent); flex-shrink: 0;
+  margin-top: 4px;
+}
+.notif-feed-empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 8px; padding: 60px 24px; text-align: center;
+  color: var(--text-3); font-size: 13.5px;
+}
+
+/* ─── Search command palette ──────────────────────────────────────────────── */
+.search-palette {
+  position: fixed;
+  top: 18%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(600px, calc(100vw - 40px));
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-md);
+  z-index: 401;
+  overflow: hidden;
+  animation: palette-in 0.15s var(--ease);
+}
+@keyframes palette-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(-8px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+.search-palette-input-wrap {
+  display: flex; align-items: center; gap: 10px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+}
+.search-palette-input-wrap svg { color: var(--text-3); flex-shrink: 0; }
+#search-palette-input {
+  flex: 1; border: none; background: transparent;
+  font-size: 14.5px; color: var(--text); outline: none;
+  font-family: 'Inter Tight', sans-serif;
+}
+#search-palette-input::placeholder { color: var(--text-3); }
+.search-palette-results { max-height: 340px; overflow-y: auto; }
+.search-result-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 18px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+  transition: background 0.08s;
+}
+.search-result-item:last-child { border-bottom: none; }
+.search-result-item:hover { background: var(--surface-2); }
+.search-result-awb {
+  font-family: 'JetBrains Mono', monospace; font-size: 12.5px;
+  font-weight: 600; color: var(--text); flex-shrink: 0;
+}
+.search-result-meta { flex: 1; font-size: 12px; color: var(--text-3); }
+.search-result-tag {
+  font-size: 10.5px; font-weight: 600; padding: 2px 8px;
+  border-radius: 10px; flex-shrink: 0;
+  background: var(--surface-2); color: var(--text-3);
+  border: 1px solid var(--border);
+}
+.search-no-results {
+  padding: 20px 18px; text-align: center;
+  color: var(--text-3); font-size: 12.5px;
+}
+
+/* Topbar search bar — just decorative trigger now */
+.topbar-search { cursor: pointer !important; }
+.topbar-search input { pointer-events: none; cursor: pointer; }

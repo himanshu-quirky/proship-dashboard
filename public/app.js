@@ -217,29 +217,25 @@ function applyClientState(d) {
 }
 
 // ── Top bar ───────────────────────────────────────────────────────────────────
+function fmtSyncTime(iso) {
+  if (!iso) return '';
+  return new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+}
+
 function updateTopBar() {
-const nb = document.getElementById('notif-badge');
+  const nb = document.getElementById('notif-badge');
   if (nb) {
     nb.textContent = state.unread > 9 ? '9+' : state.unread;
     nb.classList.toggle('hidden', state.unread === 0);
   }
-  const waPill = document.getElementById('wa-pill');
-  const waTxt = document.getElementById('wa-pill-text');
-  const waDot = document.getElementById('wa-dot');
-  if (waPill && waTxt) {
-    if (state.waConnected) {
-      waPill.className = 'wa-pill connected';
-      const recipCount = (state.settings.waRecipients || []).length;
-      waTxt.textContent = recipCount ? `WA: ${recipCount} group${recipCount > 1 ? 's' : ''}` : 'Connected';
-      if (waDot) waDot.className = 'wa-dot';
-    } else if (state.waInitializing) {
-      waPill.className = 'wa-pill';
-      waTxt.textContent = 'Connecting…';
-      if (waDot) waDot.className = 'wa-dot pulse';
+  const syncBadge = document.getElementById('sync-badge');
+  const syncText = document.getElementById('sync-badge-text');
+  if (syncBadge) {
+    if (state.lastProshipSync) {
+      if (syncText) syncText.textContent = `Synced · ${fmtSyncTime(state.lastProshipSync)}`;
+      syncBadge.classList.remove('hidden');
     } else {
-      waPill.className = 'wa-pill disconnected';
-      waTxt.textContent = 'WhatsApp';
-      if (waDot) waDot.className = 'wa-dot';
+      syncBadge.classList.add('hidden');
     }
   }
 }
@@ -990,20 +986,6 @@ function renderSettings() {
       </div>
 
       <div class="settings-card">
-        <div class="settings-card-header"><span class="settings-card-title">Slack</span></div>
-        <div class="settings-card-body">
-          <div class="form-row">
-            <label class="form-label">Incoming Webhook URL</label>
-            <input class="form-input" id="s-slack-webhook" type="text" placeholder="https://hooks.slack.com/services/…" value="${esc(s.slackWebhook||'')}">
-          </div>
-          <div style="display:flex;gap:8px">
-            <button class="btn btn-primary btn-sm" onclick="saveSlackSettings()">Save</button>
-            <button class="btn btn-outline btn-sm" onclick="testSlack()">Send test</button>
-          </div>
-        </div>
-      </div>
-
-      <div class="settings-card">
         <div class="settings-card-header"><span class="settings-card-title">Prozo Webhook Receiver</span></div>
         <div class="settings-card-body">
           <div class="form-row">
@@ -1016,6 +998,16 @@ function renderSettings() {
 
       ${isAdmin() ? `
       <div class="settings-card" style="grid-column: 1 / -1">
+        <div class="settings-card-header">
+          <span class="settings-card-title">Notification Channels</span>
+          <span style="font-size:11.5px;color:var(--text-3)">Slack · Email · WhatsApp</span>
+        </div>
+        <div class="settings-card-body" id="notif-channels-body">
+          <div style="color:var(--text-3);font-size:12.5px;padding:8px 0">Loading channels…</div>
+        </div>
+      </div>
+
+      <div class="settings-card" style="grid-column: 1 / -1">
         <div class="settings-card-header"><span class="settings-card-title">User Management</span><button class="btn btn-outline btn-sm" onclick="loadUsersList()">Refresh</button></div>
         <div class="settings-card-body">
           <div id="users-list">Loading users…</div>
@@ -1023,7 +1015,10 @@ function renderSettings() {
       </div>` : ''}
     </div>`;
 
-  if (isAdmin()) loadUsersList();
+  if (isAdmin()) {
+    loadUsersList();
+    loadNotifChannels();
+  }
 
   // Proship status indicator
   const ind = document.getElementById('proship-status-indicator');
@@ -1209,59 +1204,103 @@ async function toggleRecipient(chatId, chatName, isGroup, checked) {
   if (waSection) waSection.innerHTML = renderWASection();
 }
 
-// ── BROADCAST VIEW ────────────────────────────────────────────────────────────
+// ── NOTIFICATIONS FEED PAGE ───────────────────────────────────────────────────
 
 async function renderBroadcast() {
   const el = document.getElementById('content');
-  const s = state.settings || {};
-  const [slackStatus, emailStatus, waStatus] = await Promise.all([
-    api('/api/slack/status').catch(() => ({ configured: false })),
-    api('/api/email/status').catch(() => ({ configured: false })),
-    api('/api/whatsapp/status').catch(() => ({ connected: false }))
-  ]);
-  const tab = state.notifTab || 'slack';
-  const mode = s.notificationMode || 'both';
+  const data = await api('/api/notifications');
+  if (data) state.notifications = data;
 
-  const tabs = [
-    { id: 'slack',    label: 'Slack',    badge: slackStatus?.configured ? 'ok' : 'off' },
-    { id: 'email',    label: 'Email',    badge: emailStatus?.configured ? 'ok' : 'off' },
-    { id: 'whatsapp', label: 'WhatsApp', badge: waStatus?.connected ? 'ok' : 'off' }
-  ];
+  const typeIcon = (type) => {
+    if (type === 'breach') return `<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`;
+    if (type === 'ai_analysis') return `<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`;
+    if (type === 'sync') return `<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="1 4 1 10 7 10"/><polyline points="23 20 23 14 17 14"/><path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/></svg>`;
+    return `<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>`;
+  };
+
+  const items = state.notifications.length
+    ? state.notifications.map(n => `
+      <div class="notif-feed-item ${n.read ? 'read' : 'unread'}" data-id="${esc(n.id)}">
+        <div class="notif-feed-icon type-${esc(n.type || 'default')}">${typeIcon(n.type)}</div>
+        <div class="notif-feed-body">
+          <div class="notif-feed-text">${esc(n.message)}</div>
+          <div class="notif-feed-time">${fmtRelative(n.timestamp)}</div>
+        </div>
+        ${!n.read ? '<div class="notif-feed-dot"></div>' : ''}
+      </div>`).join('')
+    : `<div class="notif-feed-empty">
+        <svg width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" style="opacity:0.3"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
+        <p>No notifications yet</p>
+        <p style="font-size:11.5px;color:var(--text-4)">SLA breach alerts and daily digests will appear here</p>
+      </div>`;
 
   el.innerHTML = `
     <div class="view-header">
       <div>
         <div class="view-title">Notifications</div>
-        <div class="view-meta">Send SLA breach alerts and the daily digest to your team via Slack, Email, or WhatsApp</div>
+        <div class="view-meta">SLA breach alerts, AI insights, and daily digests</div>
+      </div>
+      <div class="view-actions">
+        <button class="btn btn-outline btn-sm" id="mark-all-read-page-btn">Mark all read</button>
       </div>
     </div>
+    <div class="notif-feed-list">${items}</div>`;
 
-    <div class="notif-tabs">
-      ${tabs.map(t => `<button class="notif-tab ${tab===t.id?'active':''}" data-tab="${t.id}">
-        ${t.label}
-        <span class="notif-tab-dot ${t.badge==='ok'?'dot-green':'dot-muted'}"></span>
-      </button>`).join('')}
+  document.getElementById('mark-all-read-page-btn')?.addEventListener('click', async () => {
+    await api('/api/notifications/read-all', { method: 'POST', body: '{}' });
+    state.notifications.forEach(n => n.read = true);
+    state.unread = 0;
+    updateTopBar();
+    renderBroadcast();
+  });
+
+  el.querySelectorAll('.notif-feed-item').forEach(item => {
+    item.addEventListener('click', () => {
+      api(`/api/notifications/${item.dataset.id}/read`, { method: 'POST', body: '{}' });
+      item.classList.remove('unread');
+      item.classList.add('read');
+      item.querySelector('.notif-feed-dot')?.remove();
+    });
+  });
+}
+
+// ── NOTIFICATION CHANNELS (loaded inside Settings) ────────────────────────────
+async function loadNotifChannels() {
+  const body = document.getElementById('notif-channels-body');
+  if (!body) return;
+  const [slackStatus, emailStatus, waStatus] = await Promise.all([
+    api('/api/slack/status').catch(() => ({ configured: false })),
+    api('/api/email/status').catch(() => ({ configured: false })),
+    api('/api/whatsapp/status').catch(() => ({ connected: false }))
+  ]);
+  const tab = state.notifChannelTab || 'slack';
+  const mode = (state.settings || {}).notificationMode || 'both';
+
+  body.innerHTML = `
+    <div class="notif-tabs" style="margin-bottom:16px">
+      <button class="notif-tab ${tab==='slack'?'active':''}" data-ntab="slack">Slack <span class="notif-tab-dot ${slackStatus?.configured?'dot-green':'dot-muted'}"></span></button>
+      <button class="notif-tab ${tab==='email'?'active':''}" data-ntab="email">Email <span class="notif-tab-dot ${emailStatus?.configured?'dot-green':'dot-muted'}"></span></button>
+      <button class="notif-tab ${tab==='whatsapp'?'active':''}" data-ntab="whatsapp">WhatsApp <span class="notif-tab-dot ${waStatus?.connected?'dot-green':'dot-muted'}"></span></button>
     </div>
-
-    <div id="notif-panel-body">
-      ${tab === 'slack' ? renderSlackPanel({ slackStatus, mode, webhook: s.slackWebhook || '' })
-        : tab === 'email' ? renderEmailPanel({ emailStatus, mode })
-        : renderWhatsAppPanel({ waStatus, recipients: s.waRecipients || [] })}
+    <div id="notif-channels-panel">
+      ${tab === 'slack' ? renderSlackPanel({ slackStatus, mode, webhook: (state.settings || {}).slackWebhook || '', showSchedule: true })
+        : tab === 'email' ? renderEmailPanel({ emailStatus, mode, showSchedule: true })
+        : renderWhatsAppPanel({ waStatus, recipients: (state.settings || {}).waRecipients || [] })}
     </div>`;
 
-  document.querySelectorAll('.notif-tab').forEach(btn => {
-    btn.addEventListener('click', () => { state.notifTab = btn.dataset.tab; renderBroadcast(); });
+  body.querySelectorAll('.notif-tab').forEach(btn => {
+    btn.addEventListener('click', () => { state.notifChannelTab = btn.dataset.ntab; loadNotifChannels(); });
   });
-  document.querySelectorAll('input[name="notif-mode"]').forEach(r => {
+  body.querySelectorAll('input[name="notif-mode"]').forEach(r => {
     r.addEventListener('change', () => {
-      document.querySelectorAll('.slack-mode-option').forEach(o => o.classList.remove('selected'));
+      body.querySelectorAll('.slack-mode-option').forEach(o => o.classList.remove('selected'));
       r.closest('.slack-mode-option').classList.add('selected');
     });
   });
   if (tab === 'whatsapp' && waStatus?.connected) loadWAChats();
 }
 
-function renderSlackPanel({ slackStatus, mode, webhook }) {
+function renderSlackPanel({ slackStatus, mode, webhook, showSchedule = true }) {
   return `
     <div class="slack-grid">
       <div class="slack-card">
@@ -1281,11 +1320,11 @@ function renderSlackPanel({ slackStatus, mode, webhook }) {
           <button class="btn btn-outline btn-sm" onclick="sendSlackDigestNow()" ${webhook ? '' : 'disabled'}>Send digest now</button>
         </div>
       </div>
-      ${renderSchedulePanel(mode)}
+      ${showSchedule ? renderSchedulePanel(mode) : ''}
     </div>`;
 }
 
-function renderEmailPanel({ emailStatus, mode }) {
+function renderEmailPanel({ emailStatus, mode, showSchedule = true }) {
   const recipients = state.settings?.emailRecipients || emailStatus?.recipients || [];
   return `
     <div class="slack-grid">
@@ -1316,7 +1355,7 @@ function renderEmailPanel({ emailStatus, mode }) {
           <button class="btn btn-outline btn-sm" onclick="sendEmailDigestNow()" ${emailStatus?.configured && recipients.length ? '' : 'disabled'}>Send digest now</button>
         </div>
       </div>
-      ${renderSchedulePanel(mode)}
+      ${showSchedule ? renderSchedulePanel(mode) : ''}
     </div>`;
 }
 
@@ -1655,24 +1694,8 @@ async function sendBroadcast() {
 
 // ── Notifications panel ───────────────────────────────────────────────────────
 function setupNotifPanel() {
-  document.getElementById('notif-btn').addEventListener('click', () => {
-    document.getElementById('notif-panel').classList.remove('hidden');
-    document.getElementById('notif-overlay').classList.remove('hidden');
-    loadNotifications();
-  });
-  document.getElementById('notif-close-btn').addEventListener('click', closeNotifPanel);
-  document.getElementById('notif-overlay').addEventListener('click', closeNotifPanel);
-  document.getElementById('mark-all-read-btn').addEventListener('click', async () => {
-    await api('/api/notifications/read-all', { method:'POST', body:'{}' });
-    state.notifications.forEach(n => n.read = true);
-    state.unread = 0;
-    updateTopBar();
-    loadNotifications();
-  });
-}
-function closeNotifPanel() {
-  document.getElementById('notif-panel').classList.add('hidden');
-  document.getElementById('notif-overlay').classList.add('hidden');
+  // Bell navigates to the full notifications feed page
+  document.getElementById('notif-btn').addEventListener('click', () => setView('broadcast'));
 }
 async function loadNotifications() {
   const data = await api('/api/notifications');
@@ -1761,6 +1784,85 @@ function toast(msg, type = 'info') {
   setTimeout(() => el.remove(), 3500);
 }
 
+// ── Search command palette ────────────────────────────────────────────────────
+function setupSearch() {
+  const overlay = document.getElementById('search-overlay');
+  const palette = document.getElementById('search-palette');
+  const input = document.getElementById('search-palette-input');
+  const results = document.getElementById('search-palette-results');
+  if (!overlay || !palette || !input) return;
+
+  function openPalette() {
+    overlay.classList.remove('hidden');
+    palette.classList.remove('hidden');
+    input.value = '';
+    results.innerHTML = `<div class="search-no-results">Start typing to search AWBs, couriers, or statuses…</div>`;
+    requestAnimationFrame(() => input.focus());
+  }
+
+  function closePalette() {
+    overlay.classList.add('hidden');
+    palette.classList.add('hidden');
+    input.value = '';
+    results.innerHTML = '';
+  }
+
+  function runSearch(q) {
+    q = q.trim().toLowerCase();
+    if (!q) { results.innerHTML = `<div class="search-no-results">Start typing to search AWBs, couriers, or statuses…</div>`; return; }
+
+    const all = [
+      ...(state.cancellations?.shipments || []).map(s => ({ ...s, _view: 'cancellations', _viewLabel: 'Actions' })),
+      ...(state.pickup?.shipments || []).map(s => ({ ...s, _view: 'pickup', _viewLabel: 'Pending' })),
+    ];
+
+    const hits = all.filter(s => {
+      const hay = `${s.awb || ''} ${s.city || ''} ${s.status || ''} ${s.courier || ''} ${s.breachType || ''}`.toLowerCase();
+      return hay.includes(q);
+    }).slice(0, 10);
+
+    if (!hits.length) {
+      results.innerHTML = `<div class="search-no-results">No shipments found for "<strong>${esc(q)}</strong>"</div>`;
+      return;
+    }
+
+    results.innerHTML = hits.map(s => `
+      <div class="search-result-item" data-view="${esc(s._view)}" data-awb="${esc(s.awb||'')}">
+        <span class="search-result-awb">${esc(s.awb || '—')}</span>
+        <span class="search-result-meta">${esc(s.city || '')}${s.city && s.status ? ' · ' : ''}${esc(s.status || '')}</span>
+        <span class="search-result-tag">${esc(s._viewLabel)}</span>
+      </div>`).join('');
+
+    results.querySelectorAll('.search-result-item').forEach(el => {
+      el.addEventListener('click', () => {
+        const awb = el.dataset.awb;
+        const view = el.dataset.view;
+        closePalette();
+        setView(view);
+        if (awb) {
+          setTimeout(() => {
+            const searchInput = document.getElementById('awb-search');
+            if (searchInput) {
+              searchInput.value = awb;
+              searchInput.dispatchEvent(new Event('input'));
+            }
+          }, 100);
+        }
+      });
+    });
+  }
+
+  // Open via topbar search bar click or ⌘K
+  document.querySelector('.topbar-search')?.addEventListener('click', openPalette);
+  document.querySelector('.topbar-search input')?.addEventListener('focus', openPalette);
+  document.addEventListener('keydown', e => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); openPalette(); }
+    if (e.key === 'Escape') closePalette();
+  });
+  overlay.addEventListener('click', closePalette);
+  input.addEventListener('input', () => runSearch(input.value));
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 async function init() {
   await initAuthGuard();
@@ -1768,6 +1870,7 @@ async function init() {
   setupSSE();
   setupNavigation();
   setupNotifPanel();
+  setupSearch();
   setupUpload();
   setupDateRangeBar();
   await loadData();
@@ -1790,7 +1893,7 @@ function applyRoleToUI() {
   document.body.classList.toggle('role-team', !admin);
   if (!admin) {
     // Hide nav items that only admins should see
-    document.querySelectorAll('[data-view="settings"], [data-view="broadcast"]').forEach(el => el.classList.add('hidden'));
+    document.querySelectorAll('[data-view="settings"]').forEach(el => el.classList.add('hidden'));
     // Hide "Upload Reports" in the topbar
     document.getElementById('upload-trigger-btn')?.classList.add('hidden');
   }
@@ -1812,7 +1915,7 @@ function renderUserBadge() {
       <span class="user-role role-${role}">${role === 'admin' ? 'Admin' : 'Team'}</span>
       <button class="btn-text" onclick="signOut()">Sign out</button>
     </div>`;
-  footer.insertBefore(div, footer.firstChild);
+  footer.appendChild(div);
 }
 
 async function signOut() {
