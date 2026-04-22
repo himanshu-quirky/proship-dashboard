@@ -68,13 +68,6 @@ async function initAuth() {
     }
   }
 
-  // Handle OAuth redirect callback
-  const hash = window.location.hash;
-  if (hash && hash.includes('access_token')) {
-    const { data: { session: newSession } } = await supabaseClient.auth.getSession();
-    if (newSession) { window.location.replace('/'); return; }
-  }
-
   setupListeners();
 }
 
@@ -102,15 +95,6 @@ function hideError() {
 }
 
 function setupListeners() {
-  document.getElementById('google-signin-btn').addEventListener('click', async () => {
-    hideError();
-    const { error } = await supabaseClient.auth.signInWithOAuth({
-      provider: 'google',
-      options: { redirectTo: window.location.origin + '/login' }
-    });
-    if (error) showError(error.message);
-  });
-
   document.getElementById('email-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     hideError();
@@ -162,12 +146,5 @@ function setupListeners() {
     document.getElementById('email-submit-btn').textContent = isSignUp ? 'Sign Up' : 'Sign In';
   });
 }
-
-window.addEventListener('hashchange', async () => {
-  if (supabaseClient) {
-    const { data: { session } } = await supabaseClient.auth.getSession();
-    if (session) window.location.href = '/';
-  }
-});
 
 initAuth();
