@@ -1,6 +1,9 @@
 'use strict';
 
-let supabase = null;
+// NOTE: the vendor UMD bundle sets window.supabase as a var, so we MUST NOT
+// declare a top-level variable also named "supabase" — it would clash and throw
+// "SyntaxError: Identifier 'supabase' has already been declared".
+let supabaseClient = null;
 let isSignUp = false;
 
 // Belt-and-suspenders: intercept the form's native submit BEFORE initAuth's
@@ -33,7 +36,7 @@ async function initAuth() {
     return;
   }
   try {
-    supabase = window.supabase.createClient(config.supabaseUrl, config.supabaseAnonKey);
+    supabaseClient = window.supabase.createClient(config.supabaseUrl, config.supabaseAnonKey);
   } catch (err) {
     console.error('[auth] createClient failed:', err);
     showError('Auth configuration error — contact the administrator.');
@@ -45,7 +48,7 @@ async function initAuth() {
   document.getElementById('signout-rejected')?.addEventListener('click', signOut);
 
   const params = new URLSearchParams(window.location.search);
-  const { data: { session } } = await supabase.auth.getSession();
+  const { data: { session } } = await supabaseClient.auth.getSession();
 
   if (session) {
     const me = await fetch('/api/auth/me', { headers: { Authorization: `Bearer ${session.access_token}` } }).then(r => r.json()).catch(() => ({}));
@@ -68,7 +71,7 @@ async function initAuth() {
   // Handle OAuth redirect callback
   const hash = window.location.hash;
   if (hash && hash.includes('access_token')) {
-    const { data: { session: newSession } } = await supabase.auth.getSession();
+    const { data: { session: newSession } } = await supabaseClient.auth.getSession();
     if (newSession) { window.location.replace('/'); return; }
   }
 
@@ -84,18 +87,8 @@ function showStatusMessage(which) {
 }
 
 async function signOut() {
-  if (supabase) await supabase.auth.signOut();
+  if (supabaseClient) await supabaseClient.auth.signOut();
   window.location.replace('/login');
-}
-
-function loadScript(src) {
-  return new Promise((resolve, reject) => {
-    const s = document.createElement('script');
-    s.src = src;
-    s.onload = resolve;
-    s.onerror = reject;
-    document.head.appendChild(s);
-  });
 }
 
 function showError(msg) {
@@ -111,7 +104,7 @@ function hideError() {
 function setupListeners() {
   document.getElementById('google-signin-btn').addEventListener('click', async () => {
     hideError();
-    const { error } = await supabase.auth.signInWithOAuth({
+    const { error } = await supabaseClient.auth.signInWithOAuth({
       provider: 'google',
       options: { redirectTo: window.location.origin + '/login' }
     });
@@ -133,7 +126,7 @@ function setupListeners() {
 
     try {
       if (isSignUp) {
-        const { error } = await supabase.auth.signUp({
+        const { error } = await supabaseClient.auth.signUp({
           email,
           password,
           options: { emailRedirectTo: window.location.origin + '/login' }
@@ -146,7 +139,7 @@ function setupListeners() {
           document.querySelector('.auth-toggle').classList.add('hidden');
         }
       } else {
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
         if (error) {
           showError(error.message);
         } else {
@@ -171,8 +164,8 @@ function setupListeners() {
 }
 
 window.addEventListener('hashchange', async () => {
-  if (supabase) {
-    const { data: { session } } = await supabase.auth.getSession();
+  if (supabaseClient) {
+    const { data: { session } } = await supabaseClient.auth.getSession();
     if (session) window.location.href = '/';
   }
 });
